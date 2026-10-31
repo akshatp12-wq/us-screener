@@ -63,6 +63,49 @@ def stock_stage(cfg, f, cache, panels, regime_hist):
     return run_stock_backtest(univ, panels, derived or {}, cfg, insiders, regime_hist)
 
 
+@stage("research panel")
+def research_panel(cfg, macro_d, h, series, sh, ebp_df, vix, spy):
+    """Monthly panel of every dial (as known at each month end) and strategy returns, for crash and
+    buy-timing studies. Written to docs/data/research_panel.csv."""
+    from screener.signals.macro import fit_em_probit, recession_prob
+    if series is None:
+        return None
+    p = pd.DataFrame({k: v for k, v in series.items()})
+    p = p[p.index >= "1926-01-01"]
+    if h is not None:
+        for c in ("label", "multiplier", "credit_gap", "business_red_zone", "household_red_zone", "sentiment_z",
+                  "sentiment", "bubble_share", "credit_red", "stretched"):
+            if c in h:
+                p[c] = h[c].reindex(p.index)
+    gs10, tb3, t10y3m = macro_d.get("GS10"), macro_d.get("TB3MS"), macro_d.get("T10Y3M")
+    if gs10 is not None and tb3 is not None:
+        sp = (gs10.resample("ME").mean() - tb3.resample("ME").mean())
+        if t10y3m is not None:
+            sp = t10y3m.resample("ME").mean().combine_first(sp)
+        p["term_spread"] = sp.reindex(p.index)
+        a, b = fit_em_probit(cfg["macro"]["yield_curve"]["em_table"])
+        q = p["term_spread"].rolling(3).mean()
+        p["recession_prob"] = recession_prob(q.dropna(), a, b).reindex(p.index)
+    baa = macro_d.get("BAA")
+    if baa is not None and gs10 is not None:
+        p["baa_spread"] = (baa.resample("ME").last() - gs10.resample("ME").last()).reindex(p.index)
+    if ebp_df is not None and "ebp" in ebp_df:
+        p["ebp"] = ebp_df["ebp"].reindex(p.index)
+    if vix is not None:
+        p["vix"] = vix.resample("ME").last().reindex(p.index)
+    if spy is not None and vix is not None:
+        iv = vix.dropna() ** 2 / 12
+        rv = ((np.log1p(spy.dropna()) * 100) ** 2).rolling(21).sum()
+        p["vrp"] = (iv - rv).dropna().resample("ME").last().reindex(p.index)
+    if sh is not None and not sh.empty:
+        p["cape"] = sh["cape"].reindex(p.index)
+    rec = macro_d.get("USREC")
+    if rec is not None:
+        p["usrec"] = rec.resample("ME").max().reindex(p.index)
+    p.index.name = "date"
+    return p
+
+
 def _monthly(ret: pd.Series | None) -> pd.Series | None:
     if ret is None:
         return None
@@ -101,6 +144,11 @@ def run_weekly(cfg, f, cache, out) -> list[str]:
 
     h = regime_stage(cfg, macro_d, bundle, mkt, bw, vix)
     fb = factor_stage(cfg, bundle, h, extra)
+    series = fb.pop("_series", None) if fb else None
+    panel = research_panel(cfg, macro_d, h, series, sh, ebp_df, vix, spy)
+    if panel is not None:
+        panel.to_csv(out / "research_panel.csv", float_format="%.6g")
+        written.append("research_panel.csv")
     val = validation_stage(cfg, macro_d, bundle, h, mkt, rf, sh, ebp_df, vix, spy, bonds)
     payload = {"generated": utcnow(), "factor": fb, "notes": {
         "survivorship": "Factor-level results use Ken French CRSP portfolios (survivorship-free, delisting returns "

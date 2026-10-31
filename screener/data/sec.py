@@ -40,8 +40,8 @@ CONCEPTS = {
     "shares": [("dei", "EntityCommonStockSharesOutstanding"), ("us-gaap", "CommonStockSharesOutstanding"),
                ("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding")],
 }
-CONCEPTS_VERSION = 2  # bump when CONCEPTS changes: forces one re-extraction from the bulk archive
-# items where concepts must not be mixed within one company: use the first concept that has data
+CONCEPTS_VERSION = 3  # bump when CONCEPTS changes: forces one re-extraction from the bulk archive
+# items where concepts must not be mixed within one company: use the concept with the most recent data
 EXCLUSIVE = {"shares"}
 INSTANT = {"assets", "equity", "shares"}
 FORMS = {"10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "40-F", "10-KT"}
@@ -65,10 +65,7 @@ def extract_facts(doc: dict) -> pd.DataFrame:
     facts = doc.get("facts", {})
     rows = []
     for item, cands in CONCEPTS.items():
-        found = False
         for prio, (tax, name) in enumerate(cands):
-            if found and item in EXCLUSIVE:
-                break
             node = facts.get(tax, {}).get(name)
             if not node:
                 continue
@@ -84,7 +81,6 @@ def extract_facts(doc: dict) -> pd.DataFrame:
                         continue
                     rows.append((cik, item, prio, x.get("start"), x.get("end"), x.get("val"),
                                  x.get("filed"), x.get("form")))
-                    found = True
     if not rows:
         return _typed(pd.DataFrame(columns=["cik", "item", "prio", "start", "end", "val", "filed", "form"]))
     df = pd.DataFrame(rows, columns=["cik", "item", "prio", "start", "end", "val", "filed", "form"])
@@ -92,6 +88,12 @@ def extract_facts(doc: dict) -> pd.DataFrame:
         df[c] = pd.to_datetime(df[c], errors="coerce")
     df["val"] = pd.to_numeric(df["val"], errors="coerce")
     df = df.dropna(subset=["end", "filed", "val"])
+    for item in EXCLUSIVE:  # keep one concept: the one with the most recent period (ties -> priority)
+        m = df["item"] == item
+        if m.any():
+            latest = df[m].groupby("prio")["end"].max()
+            best = latest[latest >= latest.max() - pd.Timedelta(days=100)].index.min()
+            df = df[~m | (df["prio"] == best)]
     # first report of each (item, period): the value the market actually saw first
     df = df.sort_values(["item", "prio", "start", "end", "filed"])
     df = df.drop_duplicates(["cik", "item", "start", "end"], keep="first")
@@ -325,10 +327,13 @@ def derive_company(df: pd.DataFrame, min_q: int = 8) -> dict[str, AsOf]:
     series = {it: instant_series(df, it) for it in INSTANT}
     for it in ("revenue", "cogs", "gross_profit", "net_income", "operating_income"):
         series[f"{it}_ttm"] = ttm_series(quarterly_flows(df, it))
-    if series["gross_profit_ttm"].empty and not series["revenue_ttm"].empty and not series["cogs_ttm"].empty:
+    if not series["revenue_ttm"].empty and not series["cogs_ttm"].empty:
         m = series["revenue_ttm"].merge(series["cogs_ttm"], on="end", suffixes=("_r", "_c"))
-        series["gross_profit_ttm"] = pd.DataFrame({"end": m["end"], "val": m["val_r"] - m["val_c"],
-                                                   "avail": m[["avail_r", "avail_c"]].max(axis=1)})
+        rc = pd.DataFrame({"end": m["end"], "val": m["val_r"] - m["val_c"],
+                           "avail": m[["avail_r", "avail_c"]].max(axis=1)})
+        gp = series["gross_profit_ttm"]
+        series["gross_profit_ttm"] = (pd.concat([gp, rc], ignore_index=True) if len(gp) else rc).drop_duplicates(
+            "end", keep="first").sort_values("end").reset_index(drop=True)
     series["sue"] = sue_series(quarterly_flows(df, "eps"), min_q)
     keep = ("assets", "equity", "shares", "gross_profit_ttm", "net_income_ttm", "revenue_ttm",
             "operating_income_ttm", "sue")

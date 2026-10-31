@@ -238,6 +238,8 @@ def run_factor_backtests(b: dict, cfg: dict, regime_hist: pd.DataFrame | None = 
                                                    note="Long-only blend incl. low-vol, volatility-targeted (10%), x regime "
                                                         "multiplier, 30% trend sleeve, 15% drawdown brake. Net of costs.")
     out["crash_guard"] = crash_guard_report(ls.get("momentum"), crash)
+    out["_series"] = {"long_term": lt_net, "market_neutral": mn_net, "absolute_return": ar,
+                      "market": mkt, "rf": rf, "crash_guard_on": crash["on"].astype(float)}
     return out
 
 

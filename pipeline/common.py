@@ -13,7 +13,7 @@ from screener.util import sparkline
 log = logging.getLogger("pipeline")
 
 MACRO_SERIES = ["QUSPAM770A", "QUSNAM770A", "QUSHAM770A", "CSUSHPINSA", "T10Y3M", "BAMLH0A0HYM2",
-                "VIXCLS", "DTB3", "USREC", "GS10", "TB3MS"]
+                "VIXCLS", "DTB3", "USREC", "GS10", "TB3MS", "BAA", "BAA10Y"]
 STAGE_ERRORS: list[dict] = []
 
 
