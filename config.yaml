@@ -1,0 +1,362 @@
+# =============================================================================
+# us-screener configuration. Every weight, threshold and universe setting
+# lives here. Edit, commit, and the next scheduled run picks it up.
+# Not investment advice.
+# =============================================================================
+
+meta:
+  name: US Stock & ETF Screener
+  repo: akshatp12-wq/us-screener
+  pages_url: https://akshatp12-wq.github.io/us-screener/
+  timezone: America/New_York
+
+# ----------------------------------------------------------------------------- data
+data:
+  cache_dir: .cache            # raw downloads (restored by actions/cache in CI)
+  out_dir: docs/data           # JSON written for the dashboard
+  # SEC asks for a descriptive User-Agent with contact email, < 10 req/s.
+  # Set the SEC_USER_AGENT secret, e.g. "Jane Doe jane@example.com".
+  sec_user_agent_env: SEC_USER_AGENT
+  sec_max_rps: 8
+  default_max_rps: 4
+  price_history_start: "2004-01-01"
+  stale_after_hours:           # data-health warnings
+    prices: 30
+    fred: 120
+    french: 1080
+    shiller: 1080
+    sec_fundamentals: 200
+    insiders: 2400
+    short_interest: 480
+    ebp: 1500
+    universe: 400
+    etf_holdings: 200
+
+sources:
+  fred_csv: "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
+  french_zip: "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/{name}_CSV.zip"
+  shiller_xls: "http://www.econ.yale.edu/~shiller/data/ie_data.xls"
+  ebp_csv: "https://www.federalreserve.gov/econres/notes/feds-notes/ebp_csv.csv"
+  baker_wurgler_xlsx: "https://pages.stern.nyu.edu/~jwurgler/data/Investor_Sentiment_Data_20190327_POST.xlsx"
+  sec_tickers: "https://www.sec.gov/files/company_tickers.json"
+  sec_companyfacts: "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik:010d}.json"
+  sec_companyfacts_bulk: "https://www.sec.gov/Archives/edgar/daily-index/xbrl/companyfacts.zip"
+  sec_daily_index: "https://www.sec.gov/Archives/edgar/daily-index/{year}/QTR{q}/form.{ymd}.idx"
+  sec_form345: "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/{yq}_form345.zip"
+  sec_form345_alt: "https://www.sec.gov/files/datastandardsinnovation/data/insider-transactions-data-sets/{yq}_form345.zip"
+  finra_short: "https://cdn.finra.org/equity/otcmarket/biweekly/shrt{ymd}.csv"
+  stooq_daily: "https://stooq.com/q/d/l/?s={symbol}&i=d"
+  ssga_holdings: "https://www.ssga.com/us/en/intermediary/library-content/products/fund-data/etfs/us/holdings-daily-us-en-{ticker}.xlsx"
+  wiki_sp500: "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+  wiki_sp400: "https://en.wikipedia.org/wiki/List_of_S%26P_400_companies"
+  wiki_sp600: "https://en.wikipedia.org/wiki/List_of_S%26P_600_companies"
+
+# ----------------------------------------------------------------------------- universe
+universe:
+  indices: [sp500, sp400, sp600]      # S&P 1500
+  min_price: 5.0
+  min_dollar_volume: 5000000          # 63-day median daily dollar volume
+  young_listing_years: 5
+
+etfs:
+  # expense ratios are maintained by hand from issuer sites (percent per year)
+  # kind: broad | factor | sector | industry | bond | real
+  list:
+    SPY:  {name: SPDR S&P 500, kind: broad, er: 0.0945, holdings: ssga}
+    IVV:  {name: iShares Core S&P 500, kind: broad, er: 0.03}
+    VTI:  {name: Vanguard Total Stock Market, kind: broad, er: 0.03}
+    QQQ:  {name: Invesco QQQ, kind: broad, er: 0.20}
+    IWM:  {name: iShares Russell 2000, kind: broad, er: 0.19}
+    RSP:  {name: Invesco S&P 500 Equal Weight, kind: broad, er: 0.20}
+    MDY:  {name: SPDR S&P MidCap 400, kind: broad, er: 0.23, holdings: ssga}
+    IJR:  {name: iShares Core S&P SmallCap, kind: broad, er: 0.06}
+    SPLV: {name: Invesco S&P 500 Low Volatility, kind: factor, er: 0.25}
+    SPHB: {name: Invesco S&P 500 High Beta, kind: factor, er: 0.25}
+    USMV: {name: iShares MSCI USA Min Vol, kind: factor, er: 0.15}
+    MTUM: {name: iShares MSCI USA Momentum, kind: factor, er: 0.15}
+    QUAL: {name: iShares MSCI USA Quality, kind: factor, er: 0.15}
+    VLUE: {name: iShares MSCI USA Value, kind: factor, er: 0.15}
+    IPO:  {name: Renaissance IPO ETF, kind: factor, er: 0.60}
+    XLK:  {name: Technology Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Information Technology}
+    XLF:  {name: Financial Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Financials}
+    XLE:  {name: Energy Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Energy}
+    XLV:  {name: Health Care Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Health Care}
+    XLI:  {name: Industrial Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Industrials}
+    XLY:  {name: Consumer Discretionary Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Consumer Discretionary}
+    XLP:  {name: Consumer Staples Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Consumer Staples}
+    XLU:  {name: Utilities Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Utilities}
+    XLB:  {name: Materials Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Materials}
+    XLRE: {name: Real Estate Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Real Estate}
+    XLC:  {name: Communication Services Select Sector SPDR, kind: sector, er: 0.08, holdings: ssga, gics: Communication Services}
+    SMH:  {name: VanEck Semiconductor, kind: industry, er: 0.35}
+    SOXX: {name: iShares Semiconductor, kind: industry, er: 0.34}
+    IGV:  {name: iShares Expanded Tech-Software, kind: industry, er: 0.39}
+    XBI:  {name: SPDR S&P Biotech, kind: industry, er: 0.35, holdings: ssga}
+    IBB:  {name: iShares Biotechnology, kind: industry, er: 0.44}
+    KRE:  {name: SPDR S&P Regional Banking, kind: industry, er: 0.35, holdings: ssga}
+    KBE:  {name: SPDR S&P Bank, kind: industry, er: 0.35, holdings: ssga}
+    XHB:  {name: SPDR S&P Homebuilders, kind: industry, er: 0.35, holdings: ssga}
+    ITB:  {name: iShares U.S. Home Construction, kind: industry, er: 0.38}
+    XRT:  {name: SPDR S&P Retail, kind: industry, er: 0.35, holdings: ssga}
+    XOP:  {name: SPDR S&P Oil & Gas E&P, kind: industry, er: 0.35, holdings: ssga}
+    OIH:  {name: VanEck Oil Services, kind: industry, er: 0.35}
+    GDX:  {name: VanEck Gold Miners, kind: industry, er: 0.51}
+    XME:  {name: SPDR S&P Metals & Mining, kind: industry, er: 0.35, holdings: ssga}
+    XAR:  {name: SPDR S&P Aerospace & Defense, kind: industry, er: 0.35, holdings: ssga}
+    ITA:  {name: iShares U.S. Aerospace & Defense, kind: industry, er: 0.38}
+    IYT:  {name: iShares Transportation Average, kind: industry, er: 0.38}
+    TAN:  {name: Invesco Solar, kind: industry, er: 0.67}
+    ICLN: {name: iShares Global Clean Energy, kind: industry, er: 0.39}
+    ARKK: {name: ARK Innovation, kind: industry, er: 0.75}
+    HACK: {name: Amplify Cybersecurity, kind: industry, er: 0.60}
+    CIBR: {name: First Trust Nasdaq Cybersecurity, kind: industry, er: 0.59}
+    SKYY: {name: First Trust Cloud Computing, kind: industry, er: 0.60}
+    FDN:  {name: First Trust Dow Jones Internet, kind: industry, er: 0.51}
+    JETS: {name: U.S. Global Jets, kind: industry, er: 0.60}
+    URA:  {name: Global X Uranium, kind: industry, er: 0.69}
+    LIT:  {name: Global X Lithium & Battery Tech, kind: industry, er: 0.75}
+    PAVE: {name: Global X U.S. Infrastructure Development, kind: industry, er: 0.47}
+    IHI:  {name: iShares U.S. Medical Devices, kind: industry, er: 0.38}
+    IEF:  {name: iShares 7-10 Year Treasury, kind: bond, er: 0.15}
+    TLT:  {name: iShares 20+ Year Treasury, kind: bond, er: 0.15}
+    SHY:  {name: iShares 1-3 Year Treasury, kind: bond, er: 0.15}
+    AGG:  {name: iShares Core US Aggregate Bond, kind: bond, er: 0.03}
+    LQD:  {name: iShares iBoxx IG Corporate, kind: bond, er: 0.14}
+    HYG:  {name: iShares iBoxx High Yield Corporate, kind: bond, er: 0.49}
+    TIP:  {name: iShares TIPS Bond, kind: bond, er: 0.18}
+    GLD:  {name: SPDR Gold Shares, kind: real, er: 0.40}
+    SLV:  {name: iShares Silver Trust, kind: real, er: 0.50}
+    DBC:  {name: Invesco DB Commodity Index, kind: real, er: 0.85}
+    VNQ:  {name: Vanguard Real Estate, kind: real, er: 0.13}
+
+benchmark: SPY
+market_index_symbols: {vix: "^VIX"}
+
+# ----------------------------------------------------------------------------- macro dials
+macro:
+  credit_gap:
+    series: CRDQUSAPABIS
+    hp_lambda: 400000
+    min_obs: 40                 # quarters before the one-sided filter is trusted
+    pub_lag_quarters: 2         # BIS data arrive ~2 quarters late (used in backtests)
+    green_below: 2.0
+    red_above: 10.0
+  red_zones:
+    business_credit: QUSNAM770A
+    household_credit: QUSHAM770A
+    home_prices: CSUSHPINSA
+    horizon_years: 3
+    credit_pct: 0.80            # top quintile of history (GHSS 2022)
+    price_pct: 0.667            # top tercile of history (GHSS 2022)
+    amber_credit_pct: 0.667
+  yield_curve:
+    series: T10Y3M
+    # Estrella & Mishkin (1996), Current Issues 2(7), Table: P(recession in 4Q) vs 10y-3m spread
+    em_table:
+      - [5, 1.21]
+      - [10, 0.76]
+      - [15, 0.46]
+      - [20, 0.22]
+      - [25, 0.02]
+      - [30, -0.17]
+      - [40, -0.50]
+      - [50, -0.82]
+      - [60, -1.13]
+      - [70, -1.46]
+      - [80, -1.85]
+      - [90, -2.40]
+    green_below: 20
+    red_above: 40
+  ebp:
+    amber_above: 0.0
+    red_above: 0.5
+    hy_series: BAMLH0A0HYM2
+    hy_amber_pct: 0.5
+    hy_red_pct: 0.2             # red when spreads are in the *tightest* 20% (complacency) OR widest 10%
+    hy_stress_pct: 0.9
+  cape:
+    amber_pct: 0.70
+    red_pct: 0.90
+    forward_years: 10
+
+sentiment:
+  euphoric_z: 1.0
+  fearful_z: -1.0
+  zscore_window_days: 1260      # 5 years
+  rel_window_days: 126          # 6-month relative returns
+  proxy_components: [vix, high_beta_vs_low_vol, ipo_vs_market]
+  vrp:
+    rv_window_days: 21
+    amber_pct: 0.2              # low VRP = complacent or stressed
+    green_pct: 0.5
+
+bubble:
+  window_months: 24
+  amber_excess: 1.00            # 2-year return minus market >= 100%
+  red_excess: 1.50
+  accel_months: 6
+  accel_share: 0.5              # >50% of the 2y gain earned in the last 6 months
+  vol_ratio: 1.25               # 1y vol / prior-1y vol
+  crash_drawdown: 0.40          # GSY "crash" definition for validation
+  stretched_share: 0.20         # >=20% of sector/industry ETFs flagged -> Stretched
+
+momentum_crash_guard:
+  lookback_months: 24
+  vol_window_days: 126
+  vol_pct: 0.80                 # "high volatility" = top 20% of market vol history
+  momentum_multiplier: 0.25     # momentum weight scaled by this when guard is on
+
+trend:
+  assets: {stocks: SPY, bonds: IEF, gold: GLD, commodities: DBC}
+  lookback_months: 12
+  sma_months: 10
+
+regime:
+  multipliers: {Calm: 1.0, Stretched: 0.75, Fragile: 0.5}
+
+# ----------------------------------------------------------------------------- stock signals
+signals:
+  winsor: 0.01
+  min_sector_size: 5
+  momentum: {lookback_months: 12, skip_months: 1}
+  lowvol: {window_days: 252, beta_window_days: 504}
+  short_interest:
+    low_pct: 0.30               # bottom 30% short interest -> positive
+    extreme_pct: 0.95           # top 5% -> negative
+    squeeze_si: 0.20            # SI >= 20% of shares and
+    squeeze_dtc: 8              # days to cover >= 8 -> squeeze flag
+    hard_to_borrow_si: 0.15
+  insiders:
+    lookback_quarters: 16       # 3 prior years for routine classification + current
+    score_window_days: 180
+  sue:
+    min_quarters: 8
+  excluded_failed_replication: [piotroski_f, altman_z, dividend_yield, amihud_liquidity]
+
+modes:
+  long_term:
+    label: Long-term
+    weights: {value: 0.25, profitability: 0.25, investment: 0.20, issuance: 0.20, insiders: 0.10}
+    portfolio: {n_by_regime: {Calm: 30, Stretched: 40, Fragile: 50}, gross_by_regime: {Calm: 1.0, Stretched: 0.9, Fragile: 0.8}}
+  market_neutral:
+    label: Market-neutral L/S
+    weights: {value: 0.20, momentum: 0.20, profitability: 0.20, investment: 0.10, issuance: 0.15, insiders: 0.15, short_interest: 0.10}
+    crash_guard: true
+    short_scale_by_sentiment: {euphoric: 1.25, neutral: 1.0, fearful: 0.75}
+    portfolio: {n_long: 50, n_short: 50}
+  absolute_return:
+    label: Absolute return
+    weights: {value: 0.20, profitability: 0.20, investment: 0.15, issuance: 0.15, insiders: 0.10, lowvol: 0.20}
+    target_vol: 0.10
+    max_leverage: 1.5
+    trend_sleeve_share: 0.30
+    drawdown_limit: 0.15
+    drawdown_exposure: 0.25
+    portfolio: {n: 40}
+
+euphoric_penalty:
+  amount: 0.05                  # subtracted from composite (0-1 scale) per characteristic
+  small_pct: 0.30
+  vol_pct: 0.70
+
+portfolio:
+  max_position: 0.05
+  sector_cap: 0.25
+  turnover_budget: 0.30         # max share of names replaced per rebalance
+  keep_buffer: 1.5              # keep holdings ranked within n * buffer
+  costs_bps:                    # one-way, by liquidity bucket (63d median $ volume)
+    large: 5                    # > $100M
+    mid: 15                     # $20M-$100M
+    small: 30                   # < $20M
+
+etf_scoring:
+  weights:
+    long_term: {momentum: 0.35, trend: 0.25, lookthrough: 0.40}
+    market_neutral: {momentum: 0.50, trend: 0.20, lookthrough: 0.30}
+    absolute_return: {risk_adj_momentum: 0.45, trend: 0.35, lookthrough: 0.20}
+  bubble_penalty: {amber: 0.10, red: 0.25}
+
+# ----------------------------------------------------------------------------- events
+events:
+  # FOMC: federalreserve.gov/monetarypolicy/fomccalendars.htm (statement day)
+  fomc: ["2026-01-28","2026-03-18","2026-04-29","2026-06-17","2026-07-29","2026-09-16","2026-10-28","2026-12-09",
+         "2027-01-27","2027-03-17","2027-04-28","2027-06-09","2027-07-28","2027-09-15","2027-10-27","2027-12-08"]
+  # BLS schedule: bls.gov/schedule/2026 and /2027
+  cpi: ["2026-01-13","2026-02-13","2026-03-11","2026-04-10","2026-05-12","2026-06-10","2026-07-14","2026-08-12",
+        "2026-09-11","2026-10-14","2026-11-10","2026-12-10","2027-01-13","2027-02-11","2027-03-10","2027-04-13",
+        "2027-05-12","2027-06-10","2027-07-14","2027-08-11","2027-09-14","2027-10-14","2027-11-10","2027-12-10"]
+  jobs: ["2026-01-09","2026-02-11","2026-03-06","2026-04-03","2026-05-08","2026-06-05","2026-07-02","2026-08-07",
+         "2026-09-04","2026-10-02","2026-11-06","2026-12-04","2027-01-08","2027-02-05","2027-03-05","2027-04-02",
+         "2027-05-07","2027-06-04","2027-07-02","2027-08-06","2027-09-03","2027-10-08","2027-11-05","2027-12-03"]
+  earnings_top_n: 60
+
+# ----------------------------------------------------------------------------- scenarios
+scenarios:
+  # base rates: rough unconditional frequencies of 12-month US macro states since 1950
+  base_probs: {expansion: 0.55, slowdown: 0.20, recession: 0.12, inflation_shock: 0.08, credit_crisis: 0.05}
+  # 12-month shocks (decimal returns; rate in percentage points). Calibrated to post-1950 episodes.
+  shocks:
+    expansion:       {market: 0.12, value: 0.01, momentum: 0.03, profitability: 0.00, investment: 0.00, lowvol: -0.03, rates: 0.25}
+    slowdown:        {market: -0.02, value: -0.01, momentum: 0.02, profitability: 0.02, investment: 0.01, lowvol: 0.03, rates: -0.50}
+    recession:       {market: -0.25, value: -0.03, momentum: -0.05, profitability: 0.04, investment: 0.02, lowvol: 0.08, rates: -1.50}
+    inflation_shock: {market: -0.15, value: 0.08, momentum: 0.00, profitability: 0.01, investment: 0.03, lowvol: 0.02, rates: 2.00}
+    credit_crisis:   {market: -0.40, value: -0.08, momentum: -0.10, profitability: 0.06, investment: 0.02, lowvol: 0.10, rates: -2.00}
+  sector_shocks:
+    recession:       {Energy: -0.10, Financials: -0.10, Consumer Discretionary: -0.08, Industrials: -0.05, Materials: -0.05, Consumer Staples: 0.08, Utilities: 0.08, Health Care: 0.06}
+    inflation_shock: {Energy: 0.15, Materials: 0.06, Information Technology: -0.08, Communication Services: -0.06, Real Estate: -0.08, Utilities: -0.04}
+    credit_crisis:   {Financials: -0.20, Real Estate: -0.15, Consumer Discretionary: -0.08, Consumer Staples: 0.10, Health Care: 0.08, Utilities: 0.08}
+  nudges:
+    recession_from_yield_curve: 0.5     # blend weight toward the probit probability
+    fragile_credit_crisis_add: 0.05
+    ebp_red_credit_crisis_add: 0.05
+    euphoric_slowdown_add: 0.05
+  stress_windows:
+    "2000-02 dot-com": ["2000-03-24", "2002-10-09"]
+    "2008 GFC": ["2007-10-09", "2009-03-09"]
+    "2020 COVID": ["2020-02-19", "2020-03-23"]
+    "2022 rates": ["2022-01-03", "2022-10-12"]
+  monte_carlo: {paths: 10000, horizon_days: 252, t_df: 4, seed: 7}
+
+# ----------------------------------------------------------------------------- backtests
+backtest:
+  start: "1963-07-01"
+  stock_level_start: "2011-01-31"
+  rebalance: monthly
+  signal_health_window: 36
+  decay_flag_ratio: 0.5               # rolling Sharpe below 50% of long-run Sharpe -> decay flag
+  # publication dates (journal year) for the McLean & Pontiff (2016) pre/post split
+  publication:
+    value: "1992-06-30"               # Fama & French (1992)
+    momentum: "1993-03-31"            # Jegadeesh & Titman (1993)
+    profitability: "2013-04-30"       # Novy-Marx (2013); RMW from Fama-French (2015)
+    investment: "2008-08-31"          # Cooper, Gulen & Schill (2008)
+    issuance: "1995-03-31"            # Loughran & Ritter (1995)
+    lowvol: "2014-01-31"              # Frazzini & Pedersen (2014)
+    sue: "1989-12-31"                 # Bernard & Thomas (1989)
+    short_interest: "2005-05-31"      # Asquith, Pathak & Ritter (2005)
+    insiders: "2012-06-30"            # Cohen, Malloy & Pomorski (2012)
+    bubble: "2019-01-31"              # Greenwood, Shleifer & You (2019)
+    tsmom: "2012-05-31"               # Moskowitz, Ooi & Pedersen (2012)
+    vol_managed: "2017-08-31"         # Moreira & Muir (2017)
+  # monthly trading-cost assumptions for long/short factor proxies (decimal per month).
+  # Value and momentum follow Novy-Marx & Velikov-style estimates (~5.5 bps and ~48 bps/month);
+  # the others are assumptions set conservatively from their typical turnover.
+  factor_costs: {value: 0.00055, momentum: 0.0048, profitability: 0.0006, investment: 0.0008, issuance: 0.0008, lowvol: 0.0015}
+  long_only_cost_share: 0.5
+  french_files:
+    ff5: F-F_Research_Data_5_Factors_2x3
+    mom: F-F_Momentum_Factor
+    ind49: 49_Industry_Portfolios
+    beta: Portfolios_Formed_on_BETA
+    nsi: Portfolios_Formed_on_NI
+    bm: Portfolios_Formed_on_BE-ME
+    op: Portfolios_Formed_on_OP
+    inv: Portfolios_Formed_on_INV
+    var: Portfolios_Formed_on_VAR
+    me: Portfolios_Formed_on_ME
+    mom10: 10_Portfolios_Prior_12_2
+    ff3: F-F_Research_Data_Factors
+    ff3_daily: F-F_Research_Data_Factors_daily
+  trend_assets_monthly: {gold: GLD, commodities: DBC}
+  bond_duration: 7.5
+  stock_bt_insiders_since: "2008q1"
