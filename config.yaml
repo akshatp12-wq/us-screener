@@ -396,6 +396,7 @@ backtest:
   stock_bt_insiders_since: "2008q1"
   cash_earns_tbill: true              # v1 paid 0% on uninvested cash in the stock-level test
   # Sensitivity check for survivorship bias: rebuild S&P 500 membership month by month from
-  # Wikipedia's change log and test only stocks that were members at the time.
-  pit_membership: true
+  # Wikipedia's change log and test only stocks that were members at the time. Off: as of Oct 2026
+  # the Wikipedia page no longer carries the change-log table (screener/data/membership.py).
+  pit_membership: false
   wiki_sp500_changes_table: 1

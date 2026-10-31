@@ -165,11 +165,11 @@ for speeding up money you were going to invest anyway, not for holding cash.
 ## Known limitations
 
 - **Survivorship.** Free price history excludes delisted stocks, so the stock-level backtest is flattered.
-  Judge it by the spread over its own universe, not by its return versus SPY. A sensitivity run rebuilds
-  S&P 500 membership month by month from Wikipedia's change log; stocks that left and no longer trade
-  still have no prices, so it narrows the bias without removing it.
-- **Multi-class companies.** Market cap for companies such as Berkshire comes from Yahoo in the live
-  screen (SEC data reports shares per class). Their history in the backtest still lacks a market cap.
+  Judge it by the spread over its own universe, not by its return versus SPY. Code for a point-in-time
+  S&P 500 membership check exists (`screener/data/membership.py`) but is switched off: Wikipedia's page
+  no longer carries the change-log table it was built on.
+- **Multi-class companies.** Market cap for companies such as Berkshire and Visa comes from Yahoo in the
+  live screen (SEC data reports shares per class). Their history in the backtest still lacks a market cap.
 - **XBRL coverage.** Data starts in 2009–2011, and some companies tag concepts inconsistently. Financial
   companies often have no gross profit.
 - **Short interest.** Free FINRA files cover exchange-listed stocks only from mid-2021, so short interest is
@@ -186,6 +186,24 @@ for speeding up money you were going to invest anyway, not for holding cash.
   holdings (survivors); the beta estimate is shown next to it.
 - **Factor proxies.** The library proxies are not identical to this screener's definitions. RMW is
   operating profitability, not gross profitability, and insiders have no free long history.
+
+## Version 2 (October 2026)
+
+Each candidate change was tested on its own: added to v1, and toggled in v2. It was adopted only if it
+improved the factor-level Sharpe ratio in 1963–2010 (not just since 2011). Full results are in
+`docs/data/compare.json` and on the Backtests page. v1 is commit `7f16160`.
+
+| Change | 1963–2010 Sharpe (abs. return) | Since 2011 | Adopted |
+|---|---|---|---|
+| Halve stocks below the 10-month average | +0.06 | −0.02 to −0.03 | Yes |
+| Credit warning alone → Stretched | +0.02 to +0.03 | +0.02 to +0.03 | Yes |
+| Reweight toward insiders, away from low volatility | −0.004 to +0.007 | −0.01 | No |
+| Earnings surprise timed to the press release | no pre-2011 data | spread −0.4% → +0.4% a year (not significant) | Yes (timing fix) |
+| T-bill interest on cash in the stock-level test | accounting | +1.3% a year for abs. return | Yes (fix) |
+
+Absolute return, factor level: 1963–2010 return 10.0% → 10.5% a year, Sharpe 0.50 → 0.58, average
+bear-market loss −10.4% → −7.0%. Since 2011: Sharpe 0.91 in both, return 9.0% → 8.4% a year. The trend
+switch costs return in fast rebounds such as 2020.
 
 ## Repository layout
 
