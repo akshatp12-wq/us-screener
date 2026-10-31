@@ -112,6 +112,8 @@ def _shiller_date(x) -> pd.Timestamp | None:
         d = float(x)
     except (TypeError, ValueError):
         return None
+    if not np.isfinite(d) or d < 1800:
+        return None
     year = int(d)
     month = int(round((d - year) * 100))
     if month == 0 or month > 12:
@@ -194,9 +196,29 @@ def ebp(f: Fetcher, cfg: dict) -> pd.DataFrame:
 
 # ----------------------------------------------------------------------------- Baker-Wurgler
 def parse_bw(raw: bytes) -> pd.Series:
-    xl = pd.read_excel(io.BytesIO(raw), sheet_name=0)
-    xl.columns = [str(c).strip() for c in xl.columns]
-    ycol = [c for c in xl.columns if "yearmo" in c.lower() or c.lower() == "date"][0]
+    sheets = pd.read_excel(io.BytesIO(raw), sheet_name=None, header=None)
+    xl = None
+    for sh in sheets.values():
+        for i in range(min(15, len(sh))):
+            row = [str(v).strip() for v in sh.iloc[i].tolist()]
+            if any(v.upper().startswith("SENT") for v in row):
+                xl = sh.iloc[i + 1:].copy()
+                xl.columns = row
+                break
+        if xl is not None:
+            break
+    if xl is None:
+        raise ValueError("Baker-Wurgler sheet: no SENT column found")
+    ycol = next((c for c in xl.columns if "yearmo" in c.lower() or c.lower() in ("date", "year-month", "yyyymm")), None)
+    if ycol is None:  # first column whose values look like YYYYMM
+        for c in xl.columns:
+            v = pd.to_numeric(xl[c], errors="coerce").dropna()
+            if len(v) > 100 and v.between(195001, 210012).mean() > 0.95:
+                ycol = c
+                break
+    if ycol is None:
+        raise ValueError("Baker-Wurgler sheet: no date column found")
+    xl = xl[pd.to_numeric(xl[ycol], errors="coerce").notna()]
     scol = [c for c in xl.columns if c.upper().startswith("SENT")]
     # prefer the orthogonalised level index ("SENT^" / "SENT⊥"), else the first SENT column
     pref = [c for c in scol if c.endswith("^") or "⊥" in c] or scol

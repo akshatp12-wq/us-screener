@@ -307,12 +307,19 @@ def derive_company(df: pd.DataFrame, min_q: int = 8) -> dict[str, AsOf]:
 
 
 def derive_all(store: pd.DataFrame, min_q: int = 8) -> dict[int, dict[str, AsOf]]:
-    out = {}
+    import traceback
+    out, errs = {}, []
     for cik, g in store.groupby("cik"):
         try:
             out[int(cik)] = derive_company(g, min_q)
         except Exception as e:  # noqa: BLE001
-            log.debug("derive failed for %s: %s", cik, e)
+            if len(errs) < 3:
+                errs.append(f"{cik}: {type(e).__name__}: {e} | {traceback.format_exc()[-600:]}")
+    n = store["cik"].nunique()
+    if errs:
+        log.warning("point-in-time derivation failed for %d of %d companies; first: %s", n - len(out), n, errs[0])
+    record("SEC point-in-time", status="ok" if len(out) > 0.9 * n else ("partial" if out else "error"),
+           companies=len(out), failed=n - len(out), error=("; ".join(errs)[:900] or None))
     return out
 
 

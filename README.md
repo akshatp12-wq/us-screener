@@ -85,7 +85,7 @@ run picks it up. Some examples:
 
 | # | Signal | Source | Rule | Study |
 |---|---|---|---|---|
-| 1 | Credit-to-GDP gap | BIS via FRED `CRDQUSAPABIS` | one-sided HP (λ=400,000); green <2, red >10 pp | Borio & Lowe (2002); Drehmann & Juselius (2014) |
+| 1 | Credit-to-GDP gap | BIS via FRED `QUSPAM770A` (% of GDP; the spec's `CRDQUSAPABIS` is a dollar level) | one-sided HP (λ=400,000); green <2, red >10 pp | Borio & Lowe (2002); Drehmann & Juselius (2014) |
 | 2 | Red zones | FRED `QUSNAM770A`, `QUSHAM770A`, `CSUSHPINSA`; Shiller | 3y credit growth ≥80th pct AND 3y price growth ≥66.7th pct | Greenwood, Hanson, Shleifer & Sorensen (2022) |
 | 3 | Yield-curve recession odds | FRED `T10Y3M` | probit fitted to the published table; red >40% | Estrella & Mishkin (1996, 1998) |
 | 4 | Excess bond premium | Fed `ebp_csv.csv` (fallback HY OAS) | amber >0, red >0.5 | Gilchrist & Zakrajšek (2012) |

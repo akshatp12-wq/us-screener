@@ -85,8 +85,6 @@ def run_weekly(cfg, f, cache, out) -> list[str]:
     vix = macro_d.get("VIXCLS")
     if ret is not None and panels.get("close") is not None and "^VIX" in panels["close"]:
         vix = panels["close"]["^VIX"].dropna().combine_first(vix) if vix is not None else panels["close"]["^VIX"].dropna()
-    macro_d["_stock_price"] = spliced_stock_price(sh, spy)
-
     if "ff3" not in bundle and "ff5" not in bundle:
         write_json(out / "backtest.json", {"generated": utcnow(), "status": "unavailable",
                                            "reason": "Ken French data library unreachable"})
@@ -94,6 +92,7 @@ def run_weekly(cfg, f, cache, out) -> list[str]:
     base = bundle.get("ff3", bundle.get("ff5"))
     mkt = base["Mkt-RF"] + base["RF"]
     rf = base["RF"]
+    macro_d["_stock_price"] = spliced_stock_price(sh, spy, mkt)
     bonds = factor_bt.bond_returns_from_yields(macro_d.get("GS10"), cfg["backtest"]["bond_duration"])
     extra = {"bonds": bonds}
     for k, sym in cfg["backtest"]["trend_assets_monthly"].items():

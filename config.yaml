@@ -136,7 +136,7 @@ market_index_symbols: {vix: "^VIX"}
 # ----------------------------------------------------------------------------- macro dials
 macro:
   credit_gap:
-    series: CRDQUSAPABIS
+    series: QUSPAM770A          # BIS total credit to private non-financial sector, % of GDP (adjusted for breaks)
     hp_lambda: 400000
     min_obs: 40                 # quarters before the one-sided filter is trusted
     pub_lag_quarters: 2         # BIS data arrive ~2 quarters late (used in backtests)

@@ -32,7 +32,7 @@ def regime_history(macro: dict, ind49: pd.DataFrame | None, mkt: pd.Series, cfg:
     h = pd.DataFrame(index=idx)
 
     # credit gap (one-sided HP is already real-time; add the publication lag)
-    cr = macro.get("CRDQUSAPABIS")
+    cr = macro.get(cfg["macro"]["credit_gap"]["series"])
     if cr is not None and len(cr) > 60:
         q = cr.resample("QE").last().dropna()
         gap = (q - one_sided_hp(q, cfg["macro"]["credit_gap"]["hp_lambda"], cfg["macro"]["credit_gap"]["min_obs"])).dropna()

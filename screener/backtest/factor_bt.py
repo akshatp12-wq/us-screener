@@ -224,7 +224,10 @@ def run_factor_backtests(b: dict, cfg: dict, regime_hist: pd.DataFrame | None = 
                                                        "CMA, NSI) on T-bill collateral; insiders/short interest excluded. "
                                                        "Book scaled by lagged sentiment. Net of costs.")
     mn_nog = ((_blend(ls, mn_w) - mn_cost) + rf.reindex(mn.index))[lambda s: s.index >= start].dropna()
-    out["modes"]["market_neutral"]["without_crash_guard"] = ann_stats(mn_nog)
+    nog = ann_stats(mn_nog)
+    ex = mn_nog - rf.reindex(mn_nog.index)
+    nog["sharpe"] = float(ex.mean() / ex.std() * np.sqrt(12)) if ex.std() > 0 else None
+    out["modes"]["market_neutral"]["without_crash_guard"] = nog
 
     ar_w = {k: v for k, v in cfg["modes"]["absolute_return"]["weights"].items() if k in legs}
     ar_eq = _blend(legs, ar_w)
@@ -248,8 +251,13 @@ def _sample(s: pd.Series | None, every: int = 3) -> list:
 def _mode_report(r: pd.Series, mkt: pd.Series, rf: pd.Series, mkt_ex: pd.Series, cfg: dict, mode: str, note: str) -> dict:
     m = mkt.reindex(r.index)
     exr = r - rf.reindex(r.index)
+    st, mk = ann_stats(r), ann_stats(m)
+    rf_ = rf.reindex(r.index)
+    for d_, x_ in ((st, r), (mk, m)):
+        ex = x_ - rf_
+        d_["sharpe"] = float(ex.mean() / ex.std() * np.sqrt(12)) if ex.std() > 0 else None
     res = {
-        "note": note, "stats": ann_stats(r), "market": ann_stats(m),
+        "note": note, "stats": st, "market": mk,
         "excess_vs_market": ann_stats(r - m), "capm": capm(r, mkt_ex.reindex(r.index), rf),
         "sharpe_excess": float(exr.mean() / exr.std() * np.sqrt(12)) if exr.std() > 0 else None,
         "market_sharpe_excess": float((m - rf.reindex(m.index)).mean() / (m - rf.reindex(m.index)).std() * np.sqrt(12)),

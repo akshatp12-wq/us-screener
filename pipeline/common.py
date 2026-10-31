@@ -12,7 +12,7 @@ from screener.util import sparkline
 
 log = logging.getLogger("pipeline")
 
-MACRO_SERIES = ["CRDQUSAPABIS", "QUSNAM770A", "QUSHAM770A", "CSUSHPINSA", "T10Y3M", "BAMLH0A0HYM2",
+MACRO_SERIES = ["QUSPAM770A", "QUSNAM770A", "QUSHAM770A", "CSUSHPINSA", "T10Y3M", "BAMLH0A0HYM2",
                 "VIXCLS", "DTB3", "USREC", "GS10", "TB3MS"]
 STAGE_ERRORS: list[dict] = []
 
@@ -51,11 +51,18 @@ def load_macro(f, cfg) -> dict:
     return out
 
 
-def spliced_stock_price(sh: pd.DataFrame | None, spy: pd.Series | None) -> pd.Series | None:
-    """Monthly S&P composite price (Shiller) extended with SPY price changes after Shiller's last month."""
-    if sh is None or sh.empty:
-        return None
-    p = sh["price"].dropna()
+def spliced_stock_price(sh: pd.DataFrame | None, spy: pd.Series | None,
+                        french_mkt: pd.Series | None = None) -> pd.Series | None:
+    """Monthly S&P composite price (Shiller) extended with SPY price changes after Shiller's last month.
+
+    Falls back to the Ken French market total-return index when Shiller's file is unavailable.
+    """
+    if sh is None or sh.empty or sh["price"].dropna().empty:
+        if french_mkt is None or french_mkt.dropna().empty:
+            return None
+        p = (1 + french_mkt.dropna()).cumprod()
+    else:
+        p = sh["price"].dropna()
     if spy is not None and len(spy):
         spy_px = (1 + spy.fillna(0)).cumprod().resample("ME").last()
         after = spy_px[spy_px.index > p.index[-1]]

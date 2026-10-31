@@ -73,9 +73,9 @@ def price_panels(etfs: list[str]) -> dict:
 
 # ----------------------------------------------------------------------------- FRED
 def fred_csv(series: str) -> bytes:
-    if series in ("CRDQUSAPABIS", "QUSNAM770A", "QUSHAM770A"):
+    if series in ("QUSPAM770A", "QUSNAM770A", "QUSHAM770A"):
         idx = pd.date_range("1952-01-01", "2026-04-01", freq="QS")
-        base = {"CRDQUSAPABIS": 120, "QUSNAM770A": 60, "QUSHAM770A": 60}[series]
+        base = {"QUSPAM770A": 120, "QUSNAM770A": 60, "QUSHAM770A": 60}[series]
         v = base + np.cumsum(RNG.normal(0.3, 1.2, len(idx)))
     elif series == "CSUSHPINSA":
         idx = pd.date_range("1987-01-01", "2026-08-01", freq="MS")

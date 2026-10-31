@@ -33,16 +33,22 @@ def build_regime(cfg, f, panels, macro_d, sh, ebp_df, bw, sector_issuance=None) 
         vix = macro_d["VIXCLS"]
     elif macro_d.get("VIXCLS") is not None:
         vix = vix.combine_first(macro_d["VIXCLS"])
-    stock_price = spliced_stock_price(sh, spy)
+    fr_mkt = None
+    if sh is None or sh.empty:
+        t = ms.safe(ms.french, f, cfg, cfg["backtest"]["french_files"]["ff3"], source="French:" + cfg["backtest"]["french_files"]["ff3"])
+        if t:
+            base = ms.french_table(t, "", "monthly")
+            fr_mkt = base["Mkt-RF"] + base["RF"]
+    stock_price = spliced_stock_price(sh, spy, fr_mkt)
 
     d = {}
-    cg = macro.credit_gap(macro_d.get("CRDQUSAPABIS"), cfg)
+    cg = macro.credit_gap(macro_d.get(cfg["macro"]["credit_gap"]["series"]), cfg)
     d["credit_gap"] = card("credit_gap", "Credit-to-GDP gap", cg, macro.CITE["credit_gap"],
-                           "BIS via FRED CRDQUSAPABIS", "quarterly",
+                           "BIS via FRED QUSPAM770A (% of GDP)", "quarterly",
                            "Total private credit/GDP minus one-sided HP trend (lambda 400,000)")
     rzb = macro.red_zone(macro_d.get("QUSNAM770A"), stock_price, cfg, "business")
     d["red_zone_business"] = card("red_zone_business", "Red zone: business", rzb, macro.CITE["red_zones"],
-                                  "BIS via FRED QUSNAM770A; S&P composite (Shiller) + SPY", "quarterly",
+                                  "BIS via FRED QUSNAM770A; S&P composite (Shiller, else Ken French market) + SPY", "quarterly",
                                   "3y change in business credit/GDP with 3y stock price growth, vs history")
     rzh = macro.red_zone(macro_d.get("QUSHAM770A"), macro_d.get("CSUSHPINSA"), cfg, "household")
     d["red_zone_household"] = card("red_zone_household", "Red zone: household", rzh, macro.CITE["red_zones"],
@@ -96,6 +102,12 @@ def build_fundamentals(cfg, f, cache, univ):
         return None, None
     derived = sec.derive_all(store, cfg["signals"]["sue"]["min_quarters"])
     snap = sec.snapshot(derived, pd.Timestamp.today().normalize())
+    cov = {c: int(snap[c].notna().sum()) for c in ("assets", "equity", "shares", "gross_profit_ttm", "net_income_ttm", "sue")} \
+        if len(snap) else {}
+    matched = int(univ["cik"].dropna().astype(int).isin(set(snap["cik"])).sum()) if len(snap) else 0
+    log.info("fundamentals snapshot: %d companies, %d universe matches, non-null counts %s", len(snap), matched, cov)
+    from screener.data.cache import record
+    record("SEC point-in-time", snapshot_companies=int(len(snap)), universe_matches=matched, non_null=cov)
     return derived, snap
 
 
@@ -229,7 +241,7 @@ def methodology(cfg) -> dict:
     sigs = []
     m = cfg["macro"]
     sigs += [
-        {"id": 1, "name": "Credit-to-GDP gap", "source": "BIS via FRED CRDQUSAPABIS", "freq": "quarterly",
+        {"id": 1, "name": "Credit-to-GDP gap", "source": "BIS via FRED QUSPAM770A", "freq": "quarterly",
          "formula": f"ratio minus one-sided HP trend, lambda {m['credit_gap']['hp_lambda']:,}",
          "rule": f"green < {m['credit_gap']['green_below']} pp, amber to {m['credit_gap']['red_above']}, red above",
          "cite": macro.CITE["credit_gap"]},
