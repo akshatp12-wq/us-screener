@@ -144,7 +144,7 @@ def test_regime_label_rules():
     assert regime_label("green", ["green"], "neutral", 0.25, CFG)["label"] == "Stretched"
     assert regime_label("red", ["green"], "euphoric", 0.0, CFG)["label"] == "Fragile"
     assert regime_label("green", ["red"], "neutral", 0.30, CFG)["label"] == "Fragile"
-    assert regime_label("red", ["green"], "neutral", 0.0, CFG)["label"] == "Calm"   # credit red alone isn't Fragile
+    assert regime_label("red", ["green"], "neutral", 0.0, CFG)["label"] == "Stretched"   # v2: credit red alone -> Stretched, not Fragile
 
 
 # ----------------------------------------------------------------------------- D. stock signals
@@ -333,3 +333,73 @@ def test_metrics():
     assert auc(pd.Series([0.1, 0.2, 0.8, 0.9]), lab) == 1.0
     sp = mp_split(x, "2010-01-01")
     assert sp["pre"]["n"] + sp["post"]["n"] == 400
+
+
+# ----------------------------------------------------------------------------- v2 additions
+def test_regime_credit_alone_label():
+    from screener.backtest.regime_bt import relabel
+    from screener.regime.label import regime_label
+    h = pd.DataFrame({"credit_red": [True, True, False, False], "stretched": [True, False, True, False]})
+    v1 = dict(CFG, regime={**CFG["regime"], "credit_alone_label": "Calm"})
+    assert relabel(h, v1)["label"].tolist() == ["Fragile", "Calm", "Stretched", "Calm"]
+    assert relabel(h, CFG)["label"].tolist() == ["Fragile", "Stretched", "Stretched", "Calm"]
+    assert regime_label("red", ["green"], "neutral", 0.0, CFG)["label"] == "Stretched"
+    assert regime_label("red", ["green"], "neutral", 0.0, v1)["label"] == "Calm"
+
+
+def test_trend_switch_multiplier():
+    from screener.backtest.factor_bt import trend_switch_multiplier
+    idx = pd.date_range("2000-01-31", periods=24, freq="ME")
+    r = pd.Series([0.02] * 14 + [-0.08] * 4 + [0.06] * 6, index=idx)
+    m = trend_switch_multiplier(r, CFG["modes"]["absolute_return"])
+    assert m.iloc[12] == 1.0 and m.iloc[16] == 0.5
+    off = trend_switch_multiplier(r, {"trend_switch": {"enabled": False}})
+    assert (off == 1.0).all()
+
+
+def test_release_dates_move_sue_earlier():
+    from screener.data.sec import parse_submissions, release_avail
+    doc = {"filings": {"recent": {"form": ["8-K", "8-K", "10-Q"], "filingDate": ["2024-04-25", "2024-05-20", "2024-05-08"],
+                                  "items": ["2.02,9.01", "5.02", ""]}, "files": []}}
+    dates, _ = parse_submissions(doc)
+    assert dates == ["2024-04-25"]
+    ends = np.array(["2024-03-31", "2024-06-30"], dtype="datetime64[ns]")
+    av = np.array(["2024-05-08", "2024-08-05"], dtype="datetime64[ns]")
+    out = release_avail(ends, av, np.array(dates, dtype="datetime64[ns]"))
+    assert out[0] == np.datetime64("2024-04-25") and out[1] == av[1]
+
+
+def test_cik_alias_merge():
+    from screener.data.sec import apply_aliases
+    df = pd.DataFrame({"cik": [34088, 2115436, 5]})
+    assert apply_aliases(df, "cik", CFG)["cik"].tolist() == [2115436, 2115436, 5]
+
+
+def test_pit_membership():
+    from screener.data.membership import members_fn
+    ch = pd.DataFrame({"date": pd.to_datetime(["2020-06-22", "2015-03-02"]), "added": ["NEW1", "NEW2"],
+                       "removed": ["OLD1", "OLD2"]})
+    f = members_fn({"NEW1", "NEW2", "KEEP"}, ch)
+    assert f("2021-01-31") == {"NEW1", "NEW2", "KEEP"}
+    assert f("2018-01-31") == {"OLD1", "NEW2", "KEEP"}
+    assert f("2016-01-31") == {"OLD1", "NEW2", "KEEP"}
+    assert f("2015-02-27") is None  # before the change log starts: no membership filter
+
+
+def test_buy_watch_states():
+    from screener.signals.buywatch import buy_watch
+    idx = pd.bdate_range("2018-01-01", "2021-03-31")
+    n = len(idx)
+    # steady rise, a 30% fall in early 2020, then recovery
+    px = np.linspace(100, 160, n)
+    fall = (idx >= "2020-02-20") & (idx <= "2020-03-23")
+    px[fall] = np.linspace(160, 110, fall.sum())
+    after = idx > "2020-03-23"
+    px[after] = np.linspace(112, 175, after.sum())
+    r = pd.Series(px, index=idx).pct_change()
+    cut = r.loc[:"2020-04-30"]
+    assert buy_watch(cut, CFG)["state"] == "Watching"
+    mid = r.loc[:"2020-07-31"]
+    res = buy_watch(mid, CFG)
+    assert res["state"] == "Buy signal", res
+    assert buy_watch(r.loc[:"2019-12-31"], CFG)["state"] == "No setup"

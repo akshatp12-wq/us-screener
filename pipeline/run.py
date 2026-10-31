@@ -5,6 +5,7 @@
   python pipeline/run.py --job intraday    # ETFs, indices, sentiment, regime, bubble watch, ETF ranks
   python pipeline/run.py --job weekly      # backtests and validation
   python pipeline/run.py --job all         # nightly + weekly
+  python pipeline/run.py --job compare     # v1 vs v2 side by side (docs/data/compare.json)
   python pipeline/run.py --offline         # use cached downloads only
 Exit code 1 if any pipeline stage raised (data-source outages alone do not fail the run).
 """
@@ -82,7 +83,7 @@ def write_manifest(out: Path, job: str, t0: float, cfg: dict, files: list[str]) 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--job", default="nightly", choices=["intraday", "nightly", "weekly", "all"])
+    ap.add_argument("--job", default="nightly", choices=["intraday", "nightly", "weekly", "all", "compare"])
     ap.add_argument("--offline", action="store_true")
     ap.add_argument("--config", default=None)
     a = ap.parse_args(argv)
@@ -93,6 +94,12 @@ def main(argv=None) -> int:
     cache, out = cache_dir(cfg), out_dir(cfg)
     f = Fetcher(cache, cfg, offline=a.offline)
     written: list[str] = []
+    if a.job == "compare":
+        from pipeline.compare import run_compare
+        run_compare(cfg, f, cache, out)
+        for e in STAGE_ERRORS:
+            log.error("stage %s failed: %s\n%s", e["stage"], e["error"], e["trace"])
+        return 1 if STAGE_ERRORS else 0
     jobs = {"intraday": ["intraday"], "nightly": ["nightly"], "weekly": ["weekly"], "all": ["nightly", "weekly"]}[a.job]
     from pipeline.live import run_live
     from pipeline.weekly import run_weekly

@@ -79,3 +79,21 @@ def test_full_pipeline(patched):
     # intraday run on top of the nightly state
     STAGE_ERRORS.clear()
     assert run.main(["--job", "intraday"]) == 0
+
+
+def test_compare_job(patched):
+    from pipeline import run
+    from pipeline.common import STAGE_ERRORS
+    STAGE_ERRORS.clear()
+    assert run.main(["--job", "all"]) == 0
+    STAGE_ERRORS.clear()
+    rc = run.main(["--job", "compare"])
+    assert rc == 0, STAGE_ERRORS
+    c = json.loads((patched / "out" / "compare.json").read_text())
+    assert set(c["factor"]["verdicts"]) == {"reweight", "trend_switch", "credit_alone"}
+    assert c["factor"]["verdicts"]["reweight"]["adopted"] is False and c["changes"]["trend_switch"]["adopted"] is True
+    assert "v1" in c["factor"]["variants"] and "1963-2010" in c["factor"]["variants"]["v1"]["absolute_return"]
+    assert "v1" in c["stock"]["runs"] and "v2" in c["stock"]["runs"]
+    assert "v2, S&P 500 point-in-time" in c["stock"]["runs"]
+    reg = json.loads((patched / "out" / "regime.json").read_text())
+    assert reg["dials"]["buy_watch"]["state"] in ("Buy signal", "Watching", "No setup")

@@ -45,22 +45,37 @@ def validation_stage(cfg, macro_d, bundle, h, mkt, rf, sh, ebp_df, vix, spy, bon
     return out
 
 
-@stage("stock-level backtest")
-def stock_stage(cfg, f, cache, panels, regime_hist):
-    from screener.backtest.stock_bt import run_stock_backtest
+def stock_inputs(cfg, f, cache, use_releases: bool | None = None):
+    """Universe (with CIKs), point-in-time fundamentals and insider history for the stock-level backtest."""
     univ = ms.safe(load_universe, f, cfg, cache, source="Universe")
     if univ is None:
-        return {"status": "unavailable", "reason": "universe unavailable"}
+        return None, None, None
     cmap = ms.safe(sec_cik_map, f, cfg, default={}, source="SEC tickers")
     univ["cik"] = univ["ticker"].map(cmap)
+    sue = cfg["signals"]["sue"]
+    use_releases = sue.get("release_dates") if use_releases is None else use_releases
     store_p = cache / "sec_facts.pkl"
     derived = None
     if store_p.exists():
         store = pd.read_pickle(store_p)
-        derived = sec.derive_all(store, cfg["signals"]["sue"]["min_quarters"])
+        rel = None
+        if use_releases:
+            rel = ms.safe(sec.load_earnings_releases, f, cfg, cache, univ["cik"].dropna().astype(int).tolist(),
+                          source="SEC earnings releases (8-K 2.02)")
+        derived = sec.derive_all(store, sue["min_quarters"], rel, cfg, sue.get("release_max_days", 100))
     insiders = ms.safe(sec.load_insiders, f, cfg, cache, cfg["backtest"]["stock_bt_insiders_since"],
                        source="SEC Form 3/4/5 (history)")
-    return run_stock_backtest(univ, panels, derived or {}, cfg, insiders, regime_hist)
+    insiders = sec.apply_aliases(insiders, "issuer_cik", cfg)
+    return univ, derived, insiders
+
+
+@stage("stock-level backtest")
+def stock_stage(cfg, f, cache, panels, regime_hist, rf=None):
+    from screener.backtest.stock_bt import run_stock_backtest
+    univ, derived, insiders = stock_inputs(cfg, f, cache)
+    if univ is None:
+        return {"status": "unavailable", "reason": "universe unavailable"}
+    return run_stock_backtest(univ, panels, derived or {}, cfg, insiders, regime_hist, rf_m=rf)
 
 
 @stage("crash replay and buy timing")
@@ -179,7 +194,7 @@ def run_weekly(cfg, f, cache, out) -> list[str]:
     written += ["backtest.json", "validation.json"]
 
     if ret is not None and ret.shape[1] > 200:
-        sb = stock_stage(cfg, f, cache, panels, h)
+        sb = stock_stage(cfg, f, cache, panels, h, rf)
         if sb:
             write_json(out / "stock_backtest.json", {"generated": utcnow(), **sb})
             written.append("stock_backtest.json")

@@ -86,7 +86,15 @@ def regime_history(macro: dict, ind49: pd.DataFrame | None, mkt: pd.Series, cfg:
     stretched = (h["sentiment"] == "euphoric") | (h["bubble_share"] >= cfg["bubble"]["stretched_share"])
     h["credit_red"] = credit_red
     h["stretched"] = stretched
-    h["label"] = np.where(credit_red & stretched, "Fragile", np.where(stretched, "Stretched", "Calm"))
+    return relabel(h, cfg)
+
+
+def relabel(h: pd.DataFrame, cfg: dict) -> pd.DataFrame:
+    """(Re)compute label and multiplier from the credit_red / stretched columns under `cfg`."""
+    h = h.copy()
+    alone = cfg["regime"].get("credit_alone_label", "Calm")
+    cr, st = h["credit_red"].astype(bool), h["stretched"].astype(bool)
+    h["label"] = np.where(cr & st, "Fragile", np.where(st, "Stretched", np.where(cr, alone, "Calm")))
     h["multiplier"] = h["label"].map(cfg["regime"]["multipliers"])
     return h
 
