@@ -235,6 +235,15 @@ def test_sec_quarterly_flows_derive_q4_and_ttm():
     assert len(sue_series(q.assign(val=q["val"] / 100), 8)) > 0
 
 
+def test_sec_store_with_empty_company_stays_typed():
+    from screener.data.sec import derive_all, extract_facts, snapshot
+    full = extract_facts({"cik": 7, "facts": {"us-gaap": {"Assets": {"units": {"USD": [
+        {"end": "2025-06-30", "val": 110, "form": "10-Q", "filed": "2025-08-01"}]}}}}})
+    store = pd.concat([extract_facts({"cik": 8, "facts": {}}), full], ignore_index=True)
+    snap = snapshot(derive_all(store), pd.Timestamp("2025-10-01"))
+    assert snap.set_index("cik").loc[7, "assets"] == 110
+
+
 def test_sec_extract_facts_keeps_first_report():
     from screener.data.sec import extract_facts
     doc = {"cik": 5, "facts": {"us-gaap": {"Assets": {"units": {"USD": [

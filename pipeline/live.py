@@ -34,7 +34,7 @@ def build_regime(cfg, f, panels, macro_d, sh, ebp_df, bw, sector_issuance=None) 
     elif macro_d.get("VIXCLS") is not None:
         vix = vix.combine_first(macro_d["VIXCLS"])
     fr_mkt = None
-    if sh is None or sh.empty:
+    if sh is None or sh.empty or sh["price"].dropna().empty:
         t = ms.safe(ms.french, f, cfg, cfg["backtest"]["french_files"]["ff3"], source="French:" + cfg["backtest"]["french_files"]["ff3"])
         if t:
             base = ms.french_table(t, "", "monthly")

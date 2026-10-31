@@ -206,6 +206,8 @@ def sec_tickers() -> bytes:
 
 def _company_facts(cik: int) -> dict:
     facts = {"us-gaap": {}, "dei": {}}
+    if cik % 50 == 7:  # some real filers have no usable facts at all (regression: untyped concat)
+        return {"cik": cik, "entityName": f"Co {cik}", "facts": {}}
 
     def add(tax, name, unit, rows):
         facts[tax].setdefault(name, {"units": {}})["units"][unit] = rows

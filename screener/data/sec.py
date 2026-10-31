@@ -41,6 +41,17 @@ FORMS = {"10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "40-F", "10-KT"}
 
 
 # ----------------------------------------------------------------------------- extraction
+def _typed(df: pd.DataFrame) -> pd.DataFrame:
+    """Force column dtypes (empty frames from companies without facts would otherwise turn
+    concatenated date columns into object dtype)."""
+    for c in ("start", "end", "filed"):
+        df[c] = pd.to_datetime(df[c], errors="coerce")
+    df["val"] = pd.to_numeric(df["val"], errors="coerce")
+    df["cik"] = pd.to_numeric(df["cik"], errors="coerce").astype("int64") if len(df) else df["cik"].astype("int64")
+    df["prio"] = pd.to_numeric(df["prio"], errors="coerce")
+    return df
+
+
 def extract_facts(doc: dict) -> pd.DataFrame:
     """Compact long table of the concepts we use: item, start, end, val, filed, form."""
     cik = int(doc.get("cik", 0))
@@ -64,7 +75,7 @@ def extract_facts(doc: dict) -> pd.DataFrame:
                     rows.append((cik, item, prio, x.get("start"), x.get("end"), x.get("val"),
                                  x.get("filed"), x.get("form")))
     if not rows:
-        return pd.DataFrame(columns=["cik", "item", "prio", "start", "end", "val", "filed", "form"])
+        return _typed(pd.DataFrame(columns=["cik", "item", "prio", "start", "end", "val", "filed", "form"]))
     df = pd.DataFrame(rows, columns=["cik", "item", "prio", "start", "end", "val", "filed", "form"])
     for c in ("start", "end", "filed"):
         df[c] = pd.to_datetime(df[c], errors="coerce")
@@ -103,7 +114,8 @@ def load_fundamentals(f: Fetcher, cfg: dict, cache: Path, ciks: list[int]) -> pd
                     n = f"CIK{cik:010d}.json"
                     if n in names:
                         frames.append(extract_facts(json.loads(zf.read(n))))
-            store = pd.concat(frames, ignore_index=True) if frames else store
+            frames = [x for x in frames if len(x)]
+            store = _typed(pd.concat(frames, ignore_index=True)) if frames else store
             meta["last_update"] = today.isoformat()
             try:
                 Path(zp).unlink()  # keep the cache small; compact store is what we keep
@@ -129,8 +141,10 @@ def load_fundamentals(f: Fetcher, cfg: dict, cache: Path, ciks: list[int]) -> pd
             errors.append(str(e)[:200])
         except Exception as e:  # noqa: BLE001
             errors.append(f"{cik}: {e}"[:200])
+    if store is not None:
+        store = _typed(store)
     if new_frames:
-        upd = pd.concat(new_frames, ignore_index=True)
+        upd = _typed(pd.concat(new_frames, ignore_index=True))
         if store is not None:
             store = store[~store["cik"].isin(upd["cik"].unique())]
             store = pd.concat([store, upd], ignore_index=True)
@@ -308,6 +322,7 @@ def derive_company(df: pd.DataFrame, min_q: int = 8) -> dict[str, AsOf]:
 
 def derive_all(store: pd.DataFrame, min_q: int = 8) -> dict[int, dict[str, AsOf]]:
     import traceback
+    store = _typed(store.copy())
     out, errs = {}, []
     for cik, g in store.groupby("cik"):
         try:

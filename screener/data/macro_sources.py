@@ -122,59 +122,77 @@ def _shiller_date(x) -> pd.Timestamp | None:
 
 
 def parse_shiller(raw: bytes) -> pd.DataFrame:
+    """Parse Shiller's ie_data sheet. Headers span several rows, so each column's label is the
+    joined text of the rows above the first date row; columns are then picked by label and
+    checked for plausible values."""
     xl = pd.read_excel(io.BytesIO(raw), sheet_name="Data", header=None)
-    hdr_row = None
-    for i in range(min(20, len(xl))):
-        row = [str(v).strip() for v in xl.iloc[i].tolist()]
-        if "Date" in row and any("CAPE" in v for v in row):
-            hdr_row = i
-            break
-    if hdr_row is None:
-        raise ValueError("Shiller sheet header not found")
-    header = [str(v).strip() for v in xl.iloc[hdr_row].tolist()]
-    body = xl.iloc[hdr_row + 1:].copy()
-    body.columns = header
-    dates = body["Date"].map(_shiller_date)
-    body = body[dates.notna()]
-    body.index = pd.DatetimeIndex(dates[dates.notna()])
+    dates = xl.iloc[:, 0].map(_shiller_date)
+    first = dates.first_valid_index()
+    if first is None:
+        raise ValueError("Shiller sheet: no date rows")
+    top = max(0, first - 6)
+    labels = []
+    for j in range(xl.shape[1]):
+        parts = [str(v).strip() for v in xl.iloc[top:first, j].tolist() if str(v).strip() not in ("", "nan", "NaN")]
+        labels.append(" ".join(parts))
+    body = xl.iloc[first:].copy()
+    body.index = pd.DatetimeIndex(dates.iloc[first:])
+    body = body[body.index.notna()]
 
-    def col(pred):
-        for c in body.columns:
-            if pred(c):
-                return pd.to_numeric(body[c], errors="coerce")
+    def num(j):
+        return pd.to_numeric(body.iloc[:, j], errors="coerce")
+
+    def find(pred, lo=None, hi=None):
+        for j, lab in enumerate(labels):
+            if j == 0 or not pred(lab.lower()):
+                continue
+            v = num(j)
+            med = v.median()
+            if v.notna().sum() > 100 and (lo is None or lo <= med <= hi):
+                return v
         return pd.Series(np.nan, index=body.index)
 
+    cape = find(lambda l: ("cape" in l or "p/e10" in l) and "tr " not in l and not l.startswith("tr")
+                and "total return" not in l and "excess" not in l and "yield" not in l, 4, 60)
     out = pd.DataFrame({
-        "price": col(lambda c: c == "P"),
-        "dividend": col(lambda c: c == "D"),
-        "earnings": col(lambda c: c == "E"),
-        "cpi": col(lambda c: c == "CPI"),
-        "real_price": col(lambda c: c.lower() == "real price"),
-        "real_tr_price": col(lambda c: "real total return price" in c.lower() or c.lower() == "real tr price"),
-        "cape": col(lambda c: c.upper() in ("CAPE", "P/E10", "CYCLICALLY ADJUSTED PRICE EARNINGS RATIO P/E10 OR CAPE")),
+        "price": num(1) if labels and xl.shape[1] > 1 else np.nan,
+        "dividend": num(2), "earnings": num(3), "cpi": num(4),
+        "real_price": find(lambda l: "real" in l and "price" in l and "total" not in l),
+        "real_tr_price": find(lambda l: "total return price" in l or ("real" in l and "tr price" in l)),
+        "cape": cape,
     })
-    if out["cape"].isna().all():
-        out["cape"] = col(lambda c: "CAPE" in c.upper() and "TR" not in c.upper() and "EXCESS" not in c.upper())
+    if out["cape"].notna().sum() < 100:
+        raise ValueError(f"Shiller sheet: CAPE column not recognised; labels={labels[:20]}")
     return out.dropna(how="all")
 
 
 def shiller(f: Fetcher, cfg: dict) -> pd.DataFrame:
+    """Shiller moved his data to shillerdata.com in 2024; the old Yale file is frozen. Try the new
+    site first, then Yale, and keep whichever is more recent."""
+    best, err = None, None
     try:
-        raw = f.get(cfg["sources"]["shiller_xls"], source="Shiller CAPE", ttl_hours=24 * 7, timeout=120)
-        df = parse_shiller(raw)
-    except Exception:  # noqa: BLE001 - the file moved to shillerdata.com in 2024; find its current link
         page = f.get(cfg["sources"]["shiller_page"], source="Shiller CAPE (page)", ttl_hours=24).decode("utf-8", "ignore")
-        m = re.search(r'href="([^"]*ie_data\.xls[^"]*)"', page)
-        if not m:
-            raise
-        url = m.group(1).replace("&amp;", "&")
-        if url.startswith("//"):
-            url = "https:" + url
-        raw = f.get(url, source="Shiller CAPE", ttl_hours=24 * 7, timeout=120)
-        df = parse_shiller(raw)
-    last = df["cape"].dropna()
-    record("Shiller CAPE", rows=len(df), last_obs=str(last.index[-1].date()) if len(last) else None)
-    return df
+        m = re.search(r'(https?:)?//[^"\'\s>]*ie_data\.xls[^"\'\s>]*', page)
+        if m:
+            url = m.group(0).replace("&amp;", "&")
+            url = "https:" + url if url.startswith("//") else url
+            best = parse_shiller(f.get(url, source="Shiller CAPE", ttl_hours=24 * 7, timeout=120))
+    except Exception as e:  # noqa: BLE001
+        err = e
+    if best is None or best["cape"].dropna().index[-1] < pd.Timestamp.today() - pd.Timedelta(days=200):
+        try:
+            alt = parse_shiller(f.get(cfg["sources"]["shiller_xls"], source="Shiller CAPE (Yale)", ttl_hours=24 * 7, timeout=120))
+            if best is None or alt["cape"].dropna().index[-1] > best["cape"].dropna().index[-1]:
+                best = alt
+        except Exception as e:  # noqa: BLE001
+            err = err or e
+    if best is None:
+        raise err or RuntimeError("Shiller data unavailable")
+    last = best["cape"].dropna()
+    stale = last.index[-1] < pd.Timestamp.today() - pd.Timedelta(days=200)
+    record("Shiller CAPE", rows=len(best), last_obs=str(last.index[-1].date()),
+           status="stale" if stale else "ok", error="latest Shiller file is more than 6 months old" if stale else None)
+    return best
 
 
 # ----------------------------------------------------------------------------- Fed EBP
@@ -197,35 +215,24 @@ def ebp(f: Fetcher, cfg: dict) -> pd.DataFrame:
 # ----------------------------------------------------------------------------- Baker-Wurgler
 def parse_bw(raw: bytes) -> pd.Series:
     sheets = pd.read_excel(io.BytesIO(raw), sheet_name=None, header=None)
-    xl = None
     for sh in sheets.values():
-        for i in range(min(15, len(sh))):
+        for i in range(min(20, len(sh))):
             row = [str(v).strip() for v in sh.iloc[i].tolist()]
-            if any(v.upper().startswith("SENT") for v in row):
-                xl = sh.iloc[i + 1:].copy()
-                xl.columns = row
-                break
-        if xl is not None:
-            break
-    if xl is None:
-        raise ValueError("Baker-Wurgler sheet: no SENT column found")
-    ycol = next((c for c in xl.columns if "yearmo" in c.lower() or c.lower() in ("date", "year-month", "yyyymm")), None)
-    if ycol is None:  # first column whose values look like YYYYMM
-        for c in xl.columns:
-            v = pd.to_numeric(xl[c], errors="coerce").dropna()
-            if len(v) > 100 and v.between(195001, 210012).mean() > 0.95:
-                ycol = c
-                break
-    if ycol is None:
-        raise ValueError("Baker-Wurgler sheet: no date column found")
-    xl = xl[pd.to_numeric(xl[ycol], errors="coerce").notna()]
-    scol = [c for c in xl.columns if c.upper().startswith("SENT")]
-    # prefer the orthogonalised level index ("SENT^" / "SENT⊥"), else the first SENT column
-    pref = [c for c in scol if c.endswith("^") or "⊥" in c] or scol
-    s = pd.to_numeric(xl[pref[0]], errors="coerce")
-    idx = pd.to_datetime(xl[ycol].astype(int).astype(str), format="%Y%m") + pd.offsets.MonthEnd(0)
-    s.index = idx
-    return s.dropna().rename("baker_wurgler")
+            scol = [j for j, v in enumerate(row) if v.upper().startswith("SENT")]
+            if not scol:
+                continue
+            body = sh.iloc[i + 1:]
+            for j in range(sh.shape[1]):
+                v = pd.to_numeric(body.iloc[:, j], errors="coerce")
+                ok = v.between(195001, 210012) & (v % 100).between(1, 12)
+                if ok.sum() > 100 and ok[v.notna()].mean() > 0.95:
+                    pref = [k for k in scol if row[k].endswith("^") or "⊥" in row[k]] or scol
+                    s_ = pd.to_numeric(body.iloc[:, pref[0]], errors="coerce")
+                    idx = pd.to_datetime(v[ok].astype(int).astype(str), format="%Y%m") + pd.offsets.MonthEnd(0)
+                    out = pd.Series(s_[ok].to_numpy(), index=idx).dropna()
+                    if len(out) > 100:
+                        return out.rename("baker_wurgler")
+    raise ValueError("Baker-Wurgler file: no SENT column next to a YYYYMM date column")
 
 
 def baker_wurgler(f: Fetcher, cfg: dict) -> pd.Series:
