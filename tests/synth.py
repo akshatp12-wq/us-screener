@@ -165,7 +165,7 @@ def shiller_xlsx() -> bytes:
              "Real Total Return Price", "Real Earnings", "Real TR Scaled Earnings", "CAPE"]]
     for i in range(n):
         rows.append([dates[i], p[i], d[i], e[i], cpi[i], 0, 4.0, real_p[i], d[i], real_tr[i], e[i], e[i],
-                     None if np.isnan(cape[i]) else cape[i] * 20])
+                     None if np.isnan(cape[i]) else cape[i]])
     df = pd.DataFrame(rows)
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="openpyxl") as w:

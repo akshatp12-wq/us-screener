@@ -63,6 +63,12 @@ def stock_stage(cfg, f, cache, panels, regime_hist):
     return run_stock_backtest(univ, panels, derived or {}, cfg, insiders, regime_hist)
 
 
+@stage("crash replay and buy timing")
+def crash_stage(panel):
+    from screener.backtest.crashes import buy_timing, crash_replay
+    return {"generated": utcnow(), "replay": crash_replay(panel), "buy_timing": buy_timing(panel)}
+
+
 @stage("research panel")
 def research_panel(cfg, macro_d, h, series, sh, ebp_df, vix, spy):
     """Monthly panel of every dial (as known at each month end) and strategy returns, for crash and
@@ -149,6 +155,10 @@ def run_weekly(cfg, f, cache, out) -> list[str]:
     if panel is not None:
         panel.to_csv(out / "research_panel.csv", float_format="%.6g")
         written.append("research_panel.csv")
+        cr = crash_stage(panel)
+        if cr:
+            write_json(out / "crashes.json", cr)
+            written.append("crashes.json")
     val = validation_stage(cfg, macro_d, bundle, h, mkt, rf, sh, ebp_df, vix, spy, bonds)
     payload = {"generated": utcnow(), "factor": fb, "notes": {
         "survivorship": "Factor-level results use Ken French CRSP portfolios (survivorship-free, delisting returns "

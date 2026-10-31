@@ -4,7 +4,7 @@
   const DATA = "data/";
   const POLL_MS = 5 * 60 * 1000;
   const FILES = ["regime", "bubble", "stocks", "etfs", "portfolio", "events", "backtest", "validation",
-    "stock_backtest", "track", "methodology"];
+    "stock_backtest", "track", "methodology", "crashes"];
   const S = { manifest: null, data: {}, mode: "long_term", page: "regime", stockLimit: 60,
     sort: { key: "score", dir: -1 }, filters: { sector: "", flag: "", liquid: true, q: "" }, open: new Set() };
   const MODES = { long_term: "Long-term", market_neutral: "Market-neutral L/S", absolute_return: "Absolute return" };
@@ -417,6 +417,49 @@
     return h;
   }
 
+  function pageCrashes() {
+    const c = S.data.crashes;
+    if (!c || !c.replay) return unavailable("The crash replay");
+    const eps = c.replay.episodes || [], bt = c.buy_timing || {};
+    const short = { market: "Market", long_term: "Long-term", market_neutral: "Mkt-neutral", absolute_return: "Abs. return" };
+    let h = `<h1>Crash replay and buy timing</h1><p class="lede">Every US bear market since 1960 (month-end drawdowns of ${pct(c.replay.threshold, 0)} or more), replayed as if this screener had been running: what the dials said beforehand, how each mode held up, and which buy rules would have worked. Buy rules were chosen on 1960–1999 only and judged on 2000 onward.</p>`;
+    h += `<h2>How each strategy did, peak to trough</h2><div class="table-wrap"><table><thead><tr><th>Bear market</th><th class="num">Depth</th><th class="num">Months down / recover</th>${Object.values(short).map((x) => `<th class="num">${esc(x)}</th>`).join("")}<th>Regime 12 mo before → at peak</th></tr></thead><tbody>` +
+      eps.map((e) => `<tr><td style="white-space:nowrap"><b>${esc(e.peak)}</b><span class="nm">to ${esc(e.trough)}</span></td><td class="num neg">${spct(e.depth, 0)}</td><td class="num">${e.months_down} / ${e.months_to_recover ?? "–"}</td>
+        ${Object.keys(short).map((m) => { const x = (e.performance[m] || {}).peak_to_trough; return `<td class="num ${cls(x)}">${spct(x, 0)}</td>`; }).join("")}
+        <td class="small">${esc((e.dials_12m_before || {}).label || "–")} → ${esc((e.dials_at_peak || {}).label || "–")}</td></tr>`).join("") + `</tbody></table></div>`;
+    h += `<h2>Did the dials warn ahead of the peak?</h2><p class="small">Months before each peak that a warning first fired (within the prior 24 months). Blank = no warning.</p>`;
+    const wnames = Object.keys((eps[0] || {}).warning_lead_months || {});
+    h += `<div class="table-wrap"><table><thead><tr><th>Warning</th>${eps.map((e) => `<th class="num">${esc(e.peak.slice(0, 4))}</th>`).join("")}<th class="num">Followed by a bear within 24 mo</th></tr></thead><tbody>` +
+      wnames.map((w) => { const fa = (c.replay.false_alarms || {})[w] || {}; return `<tr><td>${esc(w)}</td>${eps.map((e) => { const v = e.warning_lead_months[w]; return `<td class="num">${v === null || v === undefined ? "" : v}</td>`; }).join("")}<td class="num">${pct(fa.followed_by_bear_within_24m, 0)} <span class="small">(on ${pct(fa.share_on, 0)} of months)</span></td></tr>`; }).join("") + `</tbody></table></div><p class="small">Followed-by-a-bear rate vs ${pct((c.replay.false_alarms || {})._base_rate, 0)} for any random month. ${esc(c.replay.note)}</p>`;
+    const te = c.replay.trend_exits || [];
+    if (te.length) h += `<h3>Trend rule as an exit and re-entry signal</h3><div class="table-wrap"><table><thead><tr><th>Peak</th><th class="num">Sold, months after peak</th><th class="num">Already down</th><th class="num">Bought back, months after low</th><th class="num">Above the low</th><th class="num">Loss avoided vs holding</th></tr></thead><tbody>` +
+      te.map((t) => `<tr><td>${esc(t.peak)}</td><td class="num">${t.exit_months_after_peak ?? "–"}</td><td class="num">${spct(t.drawdown_at_exit, 0)}</td><td class="num">${t.reentry_months_after_trough ?? "–"}</td><td class="num">${spct(t.above_trough_at_reentry, 0)}</td><td class="num ${cls(t.loss_avoided_vs_hold)}">${spct(t.loss_avoided_vs_hold, 0)}</td></tr>`).join("") + `</tbody></table></div>`;
+    if (bt.rules) {
+      const ch = bt.chosen_out_of_sample || {};
+      h += `<h2>When to buy</h2><p class="verdict">Best rule chosen on 1960–1999: <b>${esc(bt.chosen_in_sample || "–")}</b>. Out of sample (2000 on) it fired ${ch.n ?? "–"} times; average next-24-month excess return ${spct(ch.fwd24_mean)} vs ${spct(ch.uncond_fwd24)} for any month; median ${esc(ch.months_from_trough_median ?? "–")} months from the bottom.</p>`;
+      h += `<div class="table-wrap"><table><thead><tr><th>Rule</th><th class="num">1960–99 signals</th><th class="num">1960–99 edge, 24 mo</th><th class="num">2000+ signals</th><th class="num">2000+ edge, 12 mo</th><th class="num">2000+ edge, 24 mo</th><th class="num">2000+ hit rate</th><th class="num">Months from bottom</th></tr></thead><tbody>` +
+        bt.rules.map((r) => { const a = r.in_sample || {}, o = r.out_of_sample || {}; return `<tr><td>${esc(r.rule)}${r.rule === bt.chosen_in_sample ? ' <span class="flag">chosen 1960–99</span>' : ""}${r.consistent ? ' <span class="flag">worked in both periods</span>' : ""}</td><td class="num">${a.n ?? 0}</td><td class="num ${cls(a.edge24)}">${spct(a.edge24)}</td><td class="num">${o.n ?? 0}</td><td class="num ${cls(o.edge12)}">${spct(o.edge12)}</td><td class="num ${cls(o.edge24)}">${spct(o.edge24)}</td><td class="num">${pct(o.fwd12_hit, 0)}</td><td class="num">${o.months_from_trough_median ?? "–"}</td></tr>`; }).join("") + `</tbody></table></div><p class="small">Edge = average excess return after a signal minus the average over all months in the same period. Signals are de-duplicated to one per 12 months. Negative "months from bottom" = bought before the low.</p>`;
+      const cp = (bt.composite || {}).periods || {};
+      if (cp["2000-2026"]) {
+        h += `<h3>Composite buy score (drawdown, credit spreads, fear, cheapness; no fitting)</h3>
+          <div class="table-wrap"><table><thead><tr><th>Period</th>${[1, 2, 3, 4, 5].map((q) => `<th class="num">Q${q}</th>`).join("")}<th class="num">Rank corr.</th></tr></thead><tbody>` +
+          Object.entries(cp).map(([k, v]) => `<tr><td>${esc(k)} next 12 mo</td>${v.quintile_fwd12.map((x) => `<td class="num ${cls(x)}">${spct(x)}</td>`).join("")}<td class="num">${num(v.corr_fwd12)}</td></tr>`).join("") +
+          `</tbody></table></div><p class="small">Q5 = strongest buy signal. Latest score: ${num(bt.composite.latest && bt.composite.latest.score)} (${pct(bt.composite.latest && bt.composite.latest.percentile, 0)} percentile, ${esc(bt.composite.latest && bt.composite.latest.date)}).</p>`;
+      }
+      const deps = bt.deployments || (bt.deployment ? [bt.deployment] : []);
+      if (deps.length) {
+        const full = (deps[0].periods || {})["1960-2026"] || {};
+        h += `<h3>Holding a 20% cash reserve for dips vs staying invested (1960–2026)</h3><div class="table-wrap"><table><thead><tr><th>Strategy</th><th class="num">CAGR</th><th class="num">Max drawdown</th><th class="num">2000+ CAGR</th></tr></thead><tbody>` +
+          deps.map((d) => { const v = d.periods["1960-2026"].buy_the_dip, o = d.periods["2000-2026"].buy_the_dip; return `<tr><td>Reserve deployed on: ${esc(d.rule)}</td><td class="num">${pct(v.cagr, 2)}</td><td class="num">${spct(v.max_dd, 0)}</td><td class="num">${pct(o.cagr, 2)}</td></tr>`; }).join("") +
+          `<tr><td>Static 80% stocks / 20% T-bills</td><td class="num">${pct(full.static_80_20 && full.static_80_20.cagr, 2)}</td><td class="num">${spct(full.static_80_20 && full.static_80_20.max_dd, 0)}</td><td class="num">${pct(deps[0].periods["2000-2026"].static_80_20.cagr, 2)}</td></tr>
+          <tr><td><b>100% stocks</b></td><td class="num"><b>${pct(full.fully_invested && full.fully_invested.cagr, 2)}</b></td><td class="num">${spct(full.fully_invested && full.fully_invested.max_dd, 0)}</td><td class="num">${pct(deps[0].periods["2000-2026"].fully_invested.cagr, 2)}</td></tr></tbody></table></div><p class="small">The reserve is deployed when the rule fires and rebuilt at the next market high. Every variant beats holding static cash but trails staying fully invested.</p>`;
+      }
+      const cur = bt.current;
+      if (cur) h += `<h3>Right now (${esc(cur.date)})</h3><p>Market ${spct(cur.drawdown_from_high)} from its high, trend ${cur.trend_up ? "up" : "down"}, credit spreads at the ${pct(cur.credit_spread_pct, 0)} percentile, sentiment z ${num(cur.sentiment_z)}. Active buy rules: <b>${esc((cur.active_rules || []).join(", ") || "none")}</b>.</p>`;
+    }
+    return h;
+  }
+
   function pageMethodology() {
     const m = S.data.methodology;
     if (!m) return unavailable("Methodology");
@@ -451,7 +494,7 @@
 
   // ------------------------------------------------------------------ router + events
   const PAGES = { regime: pageRegime, bubbles: pageBubbles, stocks: pageStocks, etfs: pageEtfs, portfolio: pagePortfolio,
-    backtests: pageBacktests, methodology: pageMethodology, health: pageHealth };
+    backtests: pageBacktests, crashes: pageCrashes, methodology: pageMethodology, health: pageHealth };
   function render() {
     const page = (location.hash || "#regime").slice(1);
     S.page = PAGES[page] ? page : "regime";

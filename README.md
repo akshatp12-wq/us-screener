@@ -178,3 +178,20 @@ tests/         unit tests per signal + synthetic-source end-to-end test
 .github/       workflows (pipeline, tests, keep-alive) and helper scripts
 config.yaml    every weight, threshold and setting
 ```
+
+## Crash replay and buy timing
+
+The weekly job replays every US bear market since 1960, defined as a month-end drawdown of 15% or more
+in the CRSP market. For each one it records:
+
+- what the dials said 12 and 6 months before the peak, and at the trough
+- how much warning each dial gave, compared with how often that warning fires in normal months
+- how each strategy mode did from peak to trough
+
+It then tests a grid of buy rules: drawdown depth, alone or combined with a trend turn, fearful
+sentiment, credit spreads past their peak, or VIX. The rules are chosen on 1960–1999 only and judged on
+2000 onward. A pre-registered composite buy score is tested the same way. A cash-reserve simulation asks
+whether holding cash to buy dips beats staying invested.
+
+Results are in `docs/data/crashes.json` and on the dashboard's Crashes page. The monthly inputs are in
+`docs/data/research_panel.csv`, so every number can be re-derived.
