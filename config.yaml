@@ -36,6 +36,7 @@ sources:
   fred_csv: "https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
   french_zip: "https://mba.tuck.dartmouth.edu/pages/faculty/ken.french/ftp/{name}_CSV.zip"
   shiller_xls: "http://www.econ.yale.edu/~shiller/data/ie_data.xls"
+  shiller_page: "https://shillerdata.com/"
   ebp_csv: "https://www.federalreserve.gov/econres/notes/feds-notes/ebp_csv.csv"
   baker_wurgler_xlsx: "https://pages.stern.nyu.edu/~jwurgler/data/Investor_Sentiment_Data_20190327_POST.xlsx"
   sec_tickers: "https://www.sec.gov/files/company_tickers.json"

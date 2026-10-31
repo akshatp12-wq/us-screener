@@ -157,8 +157,19 @@ def parse_shiller(raw: bytes) -> pd.DataFrame:
 
 
 def shiller(f: Fetcher, cfg: dict) -> pd.DataFrame:
-    raw = f.get(cfg["sources"]["shiller_xls"], source="Shiller CAPE", ttl_hours=24 * 7, timeout=120)
-    df = parse_shiller(raw)
+    try:
+        raw = f.get(cfg["sources"]["shiller_xls"], source="Shiller CAPE", ttl_hours=24 * 7, timeout=120)
+        df = parse_shiller(raw)
+    except Exception:  # noqa: BLE001 - the file moved to shillerdata.com in 2024; find its current link
+        page = f.get(cfg["sources"]["shiller_page"], source="Shiller CAPE (page)", ttl_hours=24).decode("utf-8", "ignore")
+        m = re.search(r'href="([^"]*ie_data\.xls[^"]*)"', page)
+        if not m:
+            raise
+        url = m.group(1).replace("&amp;", "&")
+        if url.startswith("//"):
+            url = "https:" + url
+        raw = f.get(url, source="Shiller CAPE", ttl_hours=24 * 7, timeout=120)
+        df = parse_shiller(raw)
     last = df["cape"].dropna()
     record("Shiller CAPE", rows=len(df), last_obs=str(last.index[-1].date()) if len(last) else None)
     return df
