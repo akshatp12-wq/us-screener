@@ -102,7 +102,7 @@ run picks it up. Some examples:
 | 15 | Issuance | SEC + splits | split-adjusted share growth; young-listing penalty | Loughran & Ritter (1995) |
 | 16 | Opportunistic insiders | SEC Form 3/4/5 data sets | routine = same month 3 years running; net opportunistic buys | Cohen, Malloy & Pomorski (2012) |
 | 17 | Short interest | FINRA (twice monthly) | low positive, extreme negative; squeeze flag | Boehmer, Huszar & Jordan (2010); Asquith, Pathak & Ritter (2005) |
-| 18 | Earnings surprise (SUE) | SEC EPS | seasonal random walk, filing-date timed | Bernard & Thomas (1989) |
+| 18 | Earnings surprise (SUE) | SEC EPS + 8-K item 2.02 dates | seasonal random walk, timed to the earnings press release | Bernard & Thomas (1989) |
 | 19 | Low volatility / beta | prices | 1y vol and 2y beta (low is good) | Frazzini & Pedersen (2014) |
 | 20–21 | ETF momentum, trend, look-through | prices, SPDR holdings | mode-weighted | Moskowitz & Grinblatt (1999) |
 | 22 | Event calendar | Fed, BLS, Yahoo | flag events within 7 days | Savor & Wilson (2013); Lucca & Moench (2015) |
@@ -112,17 +112,28 @@ the Piotroski F-score, Altman Z, dividend yield, and most liquidity signals.
 
 ### Strategy modes
 
-- **Long-term.** Weights: value .25, profitability .25, investment .2, issuance .2, insiders .1. Valuation
-  sets return expectations; the regime only changes concentration and gross exposure.
-- **Market-neutral long/short.** Weights: value .2, momentum .2, profitability .2, investment .1,
-  issuance .15, insiders .15, short interest .1.
-  - Sizing is beta-neutral, and the book is scaled by sentiment (Stambaugh, Yu & Yuan 2012).
-  - The momentum crash guard is on.
-  - Borrow and squeeze risk are flagged.
-- **Absolute return.** Adds low volatility at .2.
+- **Absolute return (default).** Weights: value .2, profitability .25, investment .15, issuance .15,
+  insiders .2, low volatility .05.
   - Exposure is volatility-targeted (Moreira & Muir 2017), then multiplied by the regime multiplier.
+  - The stock sleeve is halved when the market closes a month below its 10-month average.
   - A trend sleeve takes 30%.
   - A drawdown brake engages at −15%.
+- **Long-term.** Weights: value .25, profitability .25, investment .15, issuance .15, insiders .2. Valuation
+  sets return expectations; the regime only changes concentration and gross exposure.
+- **Market-neutral long/short (research only).** Weights: value .2, momentum .2, profitability .2,
+  investment .1, issuance .15, insiders .15, short interest .1. Tracked and backtested, but not offered
+  as a model portfolio: it has been flat at the factor level since 2010 and lost money at the stock level.
+  - Sizing is beta-neutral, and the book is scaled by sentiment (Stambaugh, Yu & Yuan 2012).
+  - The momentum crash guard is on.
+
+The regime label is a reading of risk now, not a forecast: Fragile = credit warning and Stretched;
+Stretched = euphoric sentiment, 20%+ of sector ETFs bubble-flagged, or a credit warning on its own. The
+yield curve, excess bond premium and variance risk premium are shown for context but do not feed it.
+
+The **buy watch** card fires when the market has fallen 15%+ from its high within 12 months and then
+closes a month back above its 10-month average (the one entry rule that worked both in 1960–1999 and
+after 2000). A separate capitulation flag marks a 20%+ drawdown with VIX ≥ 35 or fearful sentiment. It is
+for speeding up money you were going to invest anyway, not for holding cash.
 
 ## How it was validated
 
@@ -151,14 +162,19 @@ the Piotroski F-score, Altman Z, dividend yield, and most liquidity signals.
 ## Known limitations
 
 - **Survivorship.** Free price history excludes delisted stocks, so the stock-level backtest is flattered.
-  Judge it by the spread over its own universe, not by its return versus SPY.
+  Judge it by the spread over its own universe, not by its return versus SPY. A sensitivity run rebuilds
+  S&P 500 membership month by month from Wikipedia's change log; stocks that left and no longer trade
+  still have no prices, so it narrows the bias without removing it.
+- **Multi-class companies.** Market cap for companies such as Berkshire comes from Yahoo in the live
+  screen (SEC data reports shares per class). Their history in the backtest still lacks a market cap.
 - **XBRL coverage.** Data starts in 2009–2011, and some companies tag concepts inconsistently. Financial
   companies often have no gross profit.
 - **Short interest.** Free FINRA files cover exchange-listed stocks only from mid-2021, so short interest is
   used live but not in the long backtest. There is no free borrow-cost data; very high short interest is
   used as the hard-to-borrow proxy.
-- **SUE timing.** SUE is timed to the filing date, which comes days to weeks after the earnings press
-  release. It therefore understates the drift.
+- **SUE timing.** SUE is dated to the earnings press release (8-K item 2.02) but computed from the EPS in
+  the later 10-Q/10-K. The two almost always match; where a company revised the number in between, the
+  backtest uses the revised figure a few weeks early. Falls back to the filing date when no release is found.
 - **Baker–Wurgler.** The index is built with full-sample PCA and its public file ends years ago. The live
   composite proxy replaces it.
 - **Yahoo Finance.** Yahoo is unofficial and sometimes blocks cloud runners; Stooq is the fallback. ETF
