@@ -195,7 +195,28 @@ def wiki_html(index: str) -> bytes:
     part = {"sp500": u.iloc[:120], "sp400": u.iloc[120:180], "sp600": u.iloc[180:]}[index]
     df = pd.DataFrame({"Symbol": part["ticker"], "Security": part["name"], "GICS Sector": part["sector"],
                        "GICS Sub-Industry": part["sub_industry"], "Date added": "2010-01-01"})
-    return ("<html><body>" + df.to_html(index=False) + "</body></html>").encode()
+    html = df.to_html(index=False)
+    if index == "sp500":
+        # change log: two stocks added since 2015, replacing two that left (one now in the S&P 400)
+        ch = pd.DataFrame({("Date", "Date"): ["2020-06-22", "2015-03-02"],
+                           ("Added", "Ticker"): [part["ticker"].iloc[0], part["ticker"].iloc[1]],
+                           ("Added", "Security"): ["a", "b"],
+                           ("Removed", "Ticker"): [u["ticker"].iloc[120], "GONE"],
+                           ("Removed", "Security"): ["c", "d"], ("Reason", "Reason"): ["x", "y"]})
+        html += ch.to_html(index=False)
+    return ("<html><body>" + html + "</body></html>").encode()
+
+
+def submissions_json(cik: int) -> bytes:
+    q_ends = pd.date_range("2008-03-31", "2026-09-30", freq="QE")
+    forms, dates, items = [], [], []
+    for qe in q_ends:
+        forms += ["8-K", "10-Q", "8-K"]
+        dates += [(qe + pd.Timedelta(days=21)).strftime("%Y-%m-%d"), (qe + pd.Timedelta(days=40)).strftime("%Y-%m-%d"),
+                  (qe + pd.Timedelta(days=50)).strftime("%Y-%m-%d")]
+        items += ["2.02,9.01", "", "5.02"]
+    return json.dumps({"cik": str(cik), "filings": {"recent": {"form": forms[::-1], "filingDate": dates[::-1],
+                                                               "items": items[::-1]}, "files": []}}).encode()
 
 
 def sec_tickers() -> bytes:
@@ -344,6 +365,8 @@ def route(url: str) -> bytes:
     elif "wikipedia" in url:
         idx = "sp500" if "S%26P_500" in url else ("sp400" if "S%26P_400" in url else "sp600")
         out = wiki_html(idx)
+    elif "data.sec.gov/submissions" in url:
+        out = submissions_json(int(re.search(r"CIK(\d+)", url).group(1)))
     elif "company_tickers.json" in url:
         out = sec_tickers()
     elif "companyfacts.zip" in url:

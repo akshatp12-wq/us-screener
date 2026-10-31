@@ -158,6 +158,17 @@ def trend_signal(r: pd.Series) -> pd.Series:
     return (up / 2).where(r12.notna())
 
 
+def trend_switch_multiplier(mkt: pd.Series, mode_cfg: dict) -> pd.Series:
+    """Stock-sleeve multiplier known at month end t: `below_multiplier` when the market index is below
+    its N-month average, else 1. Apply to month t+1 (shift by one)."""
+    ts = mode_cfg.get("trend_switch") or {}
+    if not ts.get("enabled"):
+        return pd.Series(1.0, index=mkt.index)
+    px = (1 + mkt.fillna(0)).cumprod()
+    below = px < px.rolling(int(ts.get("sma_months", 10))).mean()
+    return pd.Series(np.where(below, float(ts.get("below_multiplier", 0.5)), 1.0), index=mkt.index)
+
+
 def _blend(series: dict, weights: dict) -> pd.Series:
     df = pd.DataFrame({k: series[k] for k in weights if k in series})
     W = pd.Series({k: weights[k] for k in df.columns})
@@ -236,7 +247,9 @@ def run_factor_backtests(b: dict, cfg: dict, regime_hist: pd.DataFrame | None = 
     ar = ar[ar.index >= start].dropna()
     out["modes"]["absolute_return"] = _mode_report(ar, mkt, rf, mkt_ex, cfg, "absolute_return",
                                                    note="Long-only blend incl. low-vol, volatility-targeted (10%), x regime "
-                                                        "multiplier, 30% trend sleeve, 15% drawdown brake. Net of costs.")
+                                                        "multiplier" + (", stock sleeve halved when the market is below its "
+                                                        "10-month average" if (cfg["modes"]["absolute_return"].get("trend_switch") or {}).get("enabled") else "")
+                                                        + ", 30% trend sleeve, 15% drawdown brake. Net of costs.")
     out["crash_guard"] = crash_guard_report(ls.get("momentum"), crash)
     out["_series"] = {"long_term": lt_net, "market_neutral": mn_net, "absolute_return": ar,
                       "market": mkt, "rf": rf, "crash_guard_on": crash["on"].astype(float)}
@@ -329,6 +342,7 @@ def absolute_return_series(eq: pd.Series, rf: pd.Series, ff3_daily, cfg: dict, r
     if regime_hist is not None and "multiplier" in regime_hist:
         rm = regime_hist["multiplier"].shift(1).reindex(eq.index).ffill().fillna(1.0)
         expo = expo * rm
+    expo = expo * trend_switch_multiplier(mkt, m).shift(1).reindex(eq.index).fillna(1.0)
     # trend sleeve: equities (market) + bonds (+ gold/commodities when available)
     assets = {"stocks": mkt}
     if extra:

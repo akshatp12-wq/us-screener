@@ -86,6 +86,14 @@ def build_regime(cfg, f, panels, macro_d, sh, ebp_df, bw, sector_issuance=None) 
         rf = float(macro_d["DTB3"].dropna().iloc[-1]) / 100
     tr = bub.trend_signals(ret, cfg, rf or 0.0) if ret is not None else {}
 
+    from screener.signals.buywatch import CITE as BW_CITE, buy_watch
+    bwt = buy_watch(spy, cfg, vix, se.get("value"))
+    d["buy_watch"] = card("buy_watch", "Buy watch", bwt, BW_CITE, "SPY daily; VIX; sentiment composite", "daily",
+                          bwt.get("rule", ""))
+    # v2: these dials are shown for context but do not feed the regime label or position sizing
+    for k in ("yield_curve", "ebp", "vrp"):
+        if isinstance(d.get(k), dict):
+            d[k]["info_only"] = True
     reg = regime_label(d["credit_gap"].get("status", "unavailable"),
                        [d["red_zone_business"].get("status"), d["red_zone_household"].get("status")],
                        se.get("label"), bw_res.get("flagged_share"), cfg)
@@ -100,7 +108,12 @@ def build_fundamentals(cfg, f, cache, univ):
     store = sec.load_fundamentals(f, cfg, cache, univ["cik"].dropna().astype(int).tolist())
     if store is None or store.empty:
         return None, None
-    derived = sec.derive_all(store, cfg["signals"]["sue"]["min_quarters"])
+    sue_cfg = cfg["signals"]["sue"]
+    releases = None
+    if sue_cfg.get("release_dates"):
+        releases = ms.safe(sec.load_earnings_releases, f, cfg, cache, univ["cik"].dropna().astype(int).tolist(),
+                           source="SEC earnings releases (8-K 2.02)")
+    derived = sec.derive_all(store, sue_cfg["min_quarters"], releases, cfg, sue_cfg.get("release_max_days", 100))
     snap = sec.snapshot(derived, pd.Timestamp.today().normalize())
     cov = {c: int(snap[c].notna().sum()) for c in ("assets", "equity", "shares", "gross_profit_ttm", "net_income_ttm", "sue")} \
         if len(snap) else {}
@@ -122,7 +135,39 @@ def build_fundamentals(cfg, f, cache, univ):
 @stage("stock signals")
 def raw_stock_signals(cfg, univ, snap, panels, insiders, short):
     asof = panels["ret"].index[-1]
-    return stk.compute_stock_signals(univ, snap, panels, asof, cfg, insiders=insiders, short=short)
+    df = stk.compute_stock_signals(univ, snap, panels, asof, cfg, insiders=insiders, short=short)
+    return yahoo_mcap_fallback(df, cfg)
+
+
+def yahoo_mcap_fallback(df: pd.DataFrame | None, cfg: dict) -> pd.DataFrame | None:
+    """Fill market cap (and the ratios that use it) from Yahoo where SEC share counts are missing or
+    stale, typically multi-class companies such as Berkshire Hathaway."""
+    df_ = df
+    if df_ is None or not cfg["data"].get("yahoo_mcap_fallback"):
+        return df_
+    need = df_.index[df_["mcap"].isna() & df_["price"].notna()]
+    need = df_.loc[need].sort_values("dollar_volume", ascending=False).index[:int(cfg["data"].get("yahoo_mcap_max", 80))]
+    if len(need) == 0:
+        return df_
+    try:
+        caps = px.yahoo_market_caps(list(need))
+    except Exception as e:  # noqa: BLE001
+        log.warning("yahoo market cap fallback failed: %s", e)
+        return df_
+    df_ = df_.copy()
+    df_["mcap_source"] = df_.get("mcap_source", pd.Series("SEC shares x price", index=df_.index))
+    for t, v in caps.items():
+        df_.at[t, "mcap"] = v
+        df_.at[t, "mcap_source"] = "Yahoo (all share classes)"
+        if pd.notna(df_.at[t, "price"]) and df_.at[t, "price"] > 0:
+            df_.at[t, "shares_adj"] = v / df_.at[t, "price"]
+        eq, ni = df_.at[t, "equity"], df_.at[t, "net_income_ttm"]
+        df_.at[t, "bm"] = eq / v if pd.notna(eq) and eq > 0 else np.nan
+        df_.at[t, "ep"] = ni / v if pd.notna(ni) else np.nan
+        if "short_shares" in df_ and pd.notna(df_.at[t, "short_shares"]) and pd.notna(df_.at[t, "shares_adj"]):
+            df_.at[t, "si_ratio"] = df_.at[t, "short_shares"] / df_.at[t, "shares_adj"]
+    log.info("Yahoo market-cap fallback filled %d of %d", len(caps), len(need))
+    return df_
 
 
 def sector_issuance_z(df: pd.DataFrame | None) -> dict:
@@ -237,7 +282,8 @@ def build_portfolios(cfg, df, res, whys, regime_out, panels, prev_payload):
             mu = scen["expected"]
         mc_res = se.monte_carlo(dvol, mu, cfg)
         out["modes"][mode] = {
-            "label": mc["label"], "summary": pc.summarize(port), "meta": meta, "turnover": tc,
+            "label": mc["label"], "research_only": bool(mc.get("research_only")),
+            "summary": pc.summarize(port), "meta": meta, "turnover": tc,
             "holdings": clean(port.to_dict("records")), "scenarios": scen, "stress": stress, "monte_carlo": mc_res,
         }
     return out
@@ -363,7 +409,8 @@ def run_live(cfg, f, cache, out, full: bool) -> list[str]:
     if full and univ is not None:
         r = build_fundamentals(cfg, f, cache, univ)
         derived, snap = r if r else (None, None)
-        insiders = ms.safe(sec.load_insiders, f, cfg, cache, source="SEC Form 3/4/5")
+        insiders = sec.apply_aliases(ms.safe(sec.load_insiders, f, cfg, cache, source="SEC Form 3/4/5"),
+                                     "issuer_cik", cfg)
         short_res = ms.safe(mk.load_short_interest, f, cfg, source="FINRA short interest")
         short = short_res[0] if short_res else None
         holdings = ms.safe(mk.load_holdings, f, cfg, default={}, source="SSGA ETF holdings")

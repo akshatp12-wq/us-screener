@@ -2,7 +2,11 @@
 
 Fragile   = (credit gap red OR a red zone red) AND Stretched
 Stretched = euphoric sentiment OR >= 20% of sector/industry ETFs bubble-flagged
+            (v2: OR credit dial red on its own, via regime.credit_alone_label)
 Calm      = otherwise
+
+This is a reading of risk now, not a forecast of when a decline starts: in the 1960-2026 replay the
+label mostly turned at or after market peaks.
 """
 from __future__ import annotations
 
@@ -18,6 +22,8 @@ def regime_label(credit_gap_status: str, red_zone_statuses: list[str], sentiment
         label = "Fragile"
     elif stretched:
         label = "Stretched"
+    elif credit_red:
+        label = cfg["regime"].get("credit_alone_label", "Calm")
     else:
         label = "Calm"
     reasons = []

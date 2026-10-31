@@ -9,6 +9,8 @@ meta:
   repo: akshatp12-wq/us-screener
   pages_url: https://akshatp12-wq.github.io/us-screener/
   timezone: America/New_York
+  version: v2                   # v1 = tag v1 (frozen); see docs/data/compare.json for the side-by-side
+  default_mode: absolute_return # mode the dashboard opens on
 
 # ----------------------------------------------------------------------------- data
 data:
@@ -18,6 +20,14 @@ data:
   # Set the SEC_USER_AGENT secret, e.g. "Jane Doe jane@example.com".
   sec_user_agent_env: SEC_USER_AGENT
   sec_max_rps: 8
+  # SEC filer numbers that changed (new holding company). Facts and insider trades filed under the
+  # old CIK are merged into the new one so the company keeps its history.
+  cik_aliases:
+    2115436: [34088]            # Exxon Mobil (2026 holding-company reorganisation)
+  # Multi-class companies report shares per class, which companyfacts drops. When SEC shares are
+  # missing or stale, use Yahoo's total market cap instead (live screen only).
+  yahoo_mcap_fallback: true
+  yahoo_mcap_max: 80
   default_max_rps: 4
   price_history_start: "2004-01-01"
   stale_after_hours:           # data-health warnings
@@ -214,6 +224,19 @@ trend:
 
 regime:
   multipliers: {Calm: 1.0, Stretched: 0.75, Fragile: 0.5}
+  # v1: a red credit dial on its own left the label at Calm. v2: it raises it to Stretched,
+  # because the credit dial was the one warning that beat its base rate in the crash replay.
+  credit_alone_label: Stretched
+
+# "Buy watch": the entry pattern that worked both in 1960-1999 and out of sample since 2000.
+# It is a signal to speed up money you were going to invest anyway, not a reason to hold cash.
+buy_watch:
+  drawdown: 0.15                # market at least this far below its high within the lookback
+  lookback_months: 12
+  sma_months: 10                # ... and back above its 10-month average
+  capitulation_drawdown: 0.20   # capitulation flag: deep drawdown with panic
+  capitulation_vix: 35
+  capitulation_sentiment_z: -1.0
 
 # ----------------------------------------------------------------------------- stock signals
 signals:
@@ -232,27 +255,36 @@ signals:
     score_window_days: 180
   sue:
     min_quarters: 8
+    # Time each surprise to the earnings press release (8-K item 2.02) instead of the 10-Q/10-K,
+    # which arrives weeks later. Falls back to the filing date when no release is found.
+    release_dates: true
+    release_max_days: 100       # release must fall between period end and period end + this
   excluded_failed_replication: [piotroski_f, altman_z, dividend_yield, amihud_liquidity]
 
 modes:
   long_term:
     label: Long-term
-    weights: {value: 0.25, profitability: 0.25, investment: 0.20, issuance: 0.20, insiders: 0.10}
+    # v1: value .25, profitability .25, investment .20, issuance .20, insiders .10
+    weights: {value: 0.25, profitability: 0.25, investment: 0.15, issuance: 0.15, insiders: 0.20}
     portfolio: {n_by_regime: {Calm: 30, Stretched: 40, Fragile: 50}, gross_by_regime: {Calm: 1.0, Stretched: 0.9, Fragile: 0.8}}
   market_neutral:
     label: Market-neutral L/S
+    research_only: true         # tracked and backtested, but not offered as a model portfolio by default
     weights: {value: 0.20, momentum: 0.20, profitability: 0.20, investment: 0.10, issuance: 0.15, insiders: 0.15, short_interest: 0.10}
     crash_guard: true
     short_scale_by_sentiment: {euphoric: 1.25, neutral: 1.0, fearful: 0.75}
     portfolio: {n_long: 50, n_short: 50}
   absolute_return:
     label: Absolute return
-    weights: {value: 0.20, profitability: 0.20, investment: 0.15, issuance: 0.15, insiders: 0.10, lowvol: 0.20}
+    # v1: value .20, profitability .20, investment .15, issuance .15, insiders .10, lowvol .20
+    weights: {value: 0.20, profitability: 0.25, investment: 0.15, issuance: 0.15, insiders: 0.20, lowvol: 0.05}
     target_vol: 0.10
     max_leverage: 1.5
     trend_sleeve_share: 0.30
     drawdown_limit: 0.15
     drawdown_exposure: 0.25
+    # v2: when the market closes a month below its 10-month average, halve the stock sleeve
+    trend_switch: {enabled: true, sma_months: 10, below_multiplier: 0.5}
     portfolio: {n: 40}
 
 euphoric_penalty:
@@ -361,3 +393,8 @@ backtest:
   trend_assets_monthly: {gold: GLD, commodities: DBC}
   bond_duration: 7.5
   stock_bt_insiders_since: "2008q1"
+  cash_earns_tbill: true              # v1 paid 0% on uninvested cash in the stock-level test
+  # Sensitivity check for survivorship bias: rebuild S&P 500 membership month by month from
+  # Wikipedia's change log and test only stocks that were members at the time.
+  pit_membership: true
+  wiki_sp500_changes_table: 1

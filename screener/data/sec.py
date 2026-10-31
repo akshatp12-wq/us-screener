@@ -112,6 +112,8 @@ def load_fundamentals(f: Fetcher, cfg: dict, cache: Path, ciks: list[int]) -> pd
     if meta.get("concepts_version") != CONCEPTS_VERSION:
         store = None
     want = set(int(c) for c in ciks)
+    am = alias_map(cfg)
+    want |= {old for old, new in am.items() if new in want}
     have = set(store["cik"].unique()) if store is not None else set()
     today = date.today()
     errors = []
@@ -177,8 +179,8 @@ def load_fundamentals(f: Fetcher, cfg: dict, cache: Path, ciks: list[int]) -> pd
     return store
 
 
-def recent_filers(f: Fetcher, cfg: dict, since: date, until: date) -> set[int]:
-    """CIKs with periodic reports in EDGAR daily form indexes between `since` and `until`."""
+def recent_filers(f: Fetcher, cfg: dict, since: date, until: date, forms: set | None = None) -> set[int]:
+    """CIKs with periodic reports (or `forms`) in EDGAR daily form indexes between `since` and `until`."""
     out: set[int] = set()
     d = since
     while d <= until:
@@ -187,7 +189,7 @@ def recent_filers(f: Fetcher, cfg: dict, since: date, until: date) -> set[int]:
             url = cfg["sources"]["sec_daily_index"].format(year=d.year, q=q, ymd=d.strftime("%Y%m%d"))
             try:
                 raw = f.get(url, source="SEC daily index", ttl_hours=24 * 30, allow_stale=False).decode("latin-1")
-                out |= parse_form_index(raw)
+                out |= parse_form_index(raw, forms)
             except Exception:  # noqa: BLE001 - holidays / not yet published
                 pass
         d += timedelta(days=1)
@@ -195,7 +197,71 @@ def recent_filers(f: Fetcher, cfg: dict, since: date, until: date) -> set[int]:
     return out
 
 
-def parse_form_index(text: str) -> set[int]:
+# ----------------------------------------------------------------------------- earnings releases (8-K 2.02)
+def parse_submissions(doc: dict) -> tuple[list[str], list[dict]]:
+    """Filing dates of 8-Ks reporting results (item 2.02) in a submissions JSON block, plus older-file stubs."""
+    block = doc.get("filings", {}).get("recent", doc)
+    forms, dates, items = block.get("form", []), block.get("filingDate", []), block.get("items", [])
+    out = [d for fm, d, it in zip(forms, dates, items or [""] * len(forms))
+           if fm in ("8-K", "8-K/A") and "2.02" in str(it or "")]
+    files = doc.get("filings", {}).get("files", []) if "filings" in doc else []
+    return out, files
+
+
+def load_earnings_releases(f: Fetcher, cfg: dict, cache: Path, ciks: list[int],
+                           since: str = "2009-01-01", full_every_days: int = 7) -> dict[int, np.ndarray]:
+    """Per-CIK array of earnings press-release dates (8-K item 2.02 filing dates), from EDGAR submissions.
+
+    A full refresh runs when the cache is older than `full_every_days`; otherwise only companies that
+    filed an 8-K since the last update (from the daily form index) are refetched.
+    """
+    p = cache / "earnings_releases.pkl"
+    store = pd.read_pickle(p) if p.exists() else {"asof": None, "data": {}}
+    today = date.today()
+    want = set(int(c) for c in ciks)
+    am = alias_map(cfg)
+    want |= set(am)
+    asof = date.fromisoformat(store["asof"]) if store.get("asof") else None
+    if asof is None or (today - asof).days >= full_every_days:
+        todo = want
+        full = True
+    else:
+        todo = (want - set(store["data"])) | (recent_filers(f, cfg, asof, today, {"8-K", "8-K/A"}) & want)
+        full = False
+    errs = []
+    for cik in sorted(todo):
+        try:
+            doc = json.loads(f.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json",
+                                   source="SEC submissions", ttl_hours=20))
+            dates, files = parse_submissions(doc)
+            for fl in files:
+                if str(fl.get("filingTo", "9999")) >= since and fl.get("name"):
+                    try:
+                        old = json.loads(f.get(f"https://data.sec.gov/submissions/{fl['name']}",
+                                               source="SEC submissions", ttl_hours=24 * 365))
+                        dates += parse_submissions(old)[0]
+                    except Exception as e:  # noqa: BLE001
+                        errs.append(f"{cik}/{fl.get('name')}: {e}"[:120])
+            store["data"][cik] = sorted(set(d for d in dates if d >= since))
+        except Exception as e:  # noqa: BLE001
+            errs.append(f"{cik}: {e}"[:120])
+    if todo:
+        if full:
+            store["asof"] = today.isoformat()
+        pd.to_pickle(store, p)
+    out: dict[int, np.ndarray] = {}
+    for cik, ds in store["data"].items():
+        tgt = am.get(int(cik), int(cik))
+        arr = np.array(ds, dtype="datetime64[ns]")
+        out[tgt] = np.sort(np.concatenate([out[tgt], arr])) if tgt in out else arr
+    n_with = sum(1 for v in out.values() if len(v))
+    record("SEC earnings releases (8-K 2.02)", status="ok" if not errs else "partial", companies=len(out),
+           with_releases=n_with, refetched=len(todo), error=("; ".join(errs[:5]) or None))
+    return out
+
+
+def parse_form_index(text: str, forms: set | None = None) -> set[int]:
+    forms = forms or FORMS
     ciks = set()
     started = False
     for line in text.splitlines():
@@ -205,7 +271,7 @@ def parse_form_index(text: str) -> set[int]:
         if not started:
             continue
         parts = re.split(r"\s{2,}", line.strip())
-        if len(parts) >= 4 and parts[0] in FORMS:
+        if len(parts) >= 4 and parts[0] in forms:
             try:
                 ciks.add(int(parts[-3]))
             except ValueError:
@@ -262,11 +328,13 @@ def instant_series(df: pd.DataFrame, item: str) -> pd.DataFrame:
     return x.sort_values(["end", "avail"]).drop_duplicates("end", keep="first").reset_index(drop=True)
 
 
-def sue_series(eq: pd.DataFrame, min_q: int = 8) -> pd.DataFrame:
+def sue_series(eq: pd.DataFrame, min_q: int = 8, releases: np.ndarray | None = None,
+               max_days: int = 100) -> pd.DataFrame:
     """Standardized unexpected earnings (seasonal random walk, Bernard & Thomas 1989).
 
     SUE_q = (EPS_q - EPS_{q-4}) / std of the previous `min_q` such changes. Availability is the
-    filing date of quarter q (later than the press release, so this is conservative).
+    earnings press release (8-K item 2.02) when `releases` holds one between the period end and the
+    10-Q/10-K filing, otherwise the filing date of quarter q.
     """
     if eq is None or len(eq) < min_q + 5:
         return pd.DataFrame(columns=["end", "val", "avail"])
@@ -281,7 +349,23 @@ def sue_series(eq: pd.DataFrame, min_q: int = 8) -> pd.DataFrame:
         sd = c["d"].iloc[i - min_q:i].std()
         if sd and sd > 0:
             out.append((c["end"].iloc[i], c["d"].iloc[i] / sd, c["avail"].iloc[i]))
-    return pd.DataFrame(out, columns=["end", "val", "avail"])
+    res = pd.DataFrame(out, columns=["end", "val", "avail"])
+    if releases is not None and len(releases) and len(res):
+        res["avail"] = release_avail(res["end"].to_numpy("datetime64[ns]"), res["avail"].to_numpy("datetime64[ns]"),
+                                     releases, max_days)
+    return res
+
+
+def release_avail(ends: np.ndarray, avails: np.ndarray, releases: np.ndarray, max_days: int = 100) -> np.ndarray:
+    """Earliest release date in (end, min(avail, end + max_days)] for each period, else the filing date."""
+    rel = np.sort(np.asarray(releases, dtype="datetime64[ns]"))
+    out = avails.copy()
+    lim = ends + np.timedelta64(max_days, "D")
+    for i in range(len(ends)):
+        j = np.searchsorted(rel, ends[i], side="right")
+        if j < len(rel) and rel[j] <= min(avails[i], lim[i]):
+            out[i] = rel[j]
+    return out
 
 
 class AsOf:
@@ -322,7 +406,8 @@ class AsOf:
         return float(self.vals[ok][j]) if diff[j] <= tol_days else None
 
 
-def derive_company(df: pd.DataFrame, min_q: int = 8) -> dict[str, AsOf]:
+def derive_company(df: pd.DataFrame, min_q: int = 8, releases: np.ndarray | None = None,
+                   max_days: int = 100) -> dict[str, AsOf]:
     """Per-company point-in-time series."""
     series = {it: instant_series(df, it) for it in INSTANT}
     for it in ("revenue", "cogs", "gross_profit", "net_income", "operating_income"):
@@ -334,19 +419,39 @@ def derive_company(df: pd.DataFrame, min_q: int = 8) -> dict[str, AsOf]:
         gp = series["gross_profit_ttm"]
         series["gross_profit_ttm"] = (pd.concat([gp, rc], ignore_index=True) if len(gp) else rc).drop_duplicates(
             "end", keep="first").sort_values("end").reset_index(drop=True)
-    series["sue"] = sue_series(quarterly_flows(df, "eps"), min_q)
+    series["sue"] = sue_series(quarterly_flows(df, "eps"), min_q, releases, max_days)
     keep = ("assets", "equity", "shares", "gross_profit_ttm", "net_income_ttm", "revenue_ttm",
             "operating_income_ttm", "sue")
     return {k: AsOf(series[k]) for k in keep}
 
 
-def derive_all(store: pd.DataFrame, min_q: int = 8) -> dict[int, dict[str, AsOf]]:
+def alias_map(cfg: dict | None) -> dict[int, int]:
+    """old CIK -> current CIK, from data.cik_aliases."""
+    out = {}
+    for new, olds in ((cfg or {}).get("data", {}).get("cik_aliases") or {}).items():
+        for o in olds:
+            out[int(o)] = int(new)
+    return out
+
+
+def apply_aliases(df: pd.DataFrame, col: str, cfg: dict | None) -> pd.DataFrame:
+    am = alias_map(cfg)
+    if df is None or df.empty or not am or col not in df:
+        return df
+    df = df.copy()
+    df[col] = df[col].map(lambda c: am.get(int(c), int(c)) if pd.notna(c) else c)
+    return df
+
+
+def derive_all(store: pd.DataFrame, min_q: int = 8, releases: dict | None = None, cfg: dict | None = None,
+               max_days: int = 100) -> dict[int, dict[str, AsOf]]:
     import traceback
-    store = _typed(store.copy())
+    store = apply_aliases(_typed(store.copy()), "cik", cfg)
+    releases = releases or {}
     out, errs = {}, []
     for cik, g in store.groupby("cik"):
         try:
-            out[int(cik)] = derive_company(g, min_q)
+            out[int(cik)] = derive_company(g, min_q, releases.get(int(cik)), max_days)
         except Exception as e:  # noqa: BLE001
             if len(errs) < 3:
                 errs.append(f"{cik}: {type(e).__name__}: {e} | {traceback.format_exc()[-600:]}")

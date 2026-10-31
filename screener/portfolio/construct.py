@@ -109,6 +109,11 @@ def absolute_return(score, df, cfg, mode_cfg, regime, basket_vol, trend, prev=No
         return pd.DataFrame(), {}
     expo = min(mode_cfg["max_leverage"], mode_cfg["target_vol"] / basket_vol) if basket_vol and basket_vol > 0 else 1.0
     expo *= regime["multiplier"]
+    ts = mode_cfg.get("trend_switch") or {}
+    switch = 1.0
+    if ts.get("enabled") and (trend.get("stocks") or {}).get("above_10m_sma") is False:
+        switch = float(ts.get("below_multiplier", 0.5))
+    expo *= switch
     sleeve = mode_cfg["trend_sleeve_share"]
     eq_w = expo * (1 - sleeve)
     w = min(eq_w / len(names), cfg["portfolio"]["max_position"] * max(1.0, expo))
@@ -118,7 +123,7 @@ def absolute_return(score, df, cfg, mode_cfg, regime, basket_vol, trend, prev=No
     if ups:
         for s in ups:
             trend_rows.append({"ticker": s, "weight": sleeve / len(ups), "sector": "Trend sleeve", "side": "trend"})
-    meta = {"vol_target_exposure": expo, "basket_vol": basket_vol, "equity_weight": eq_w,
+    meta = {"vol_target_exposure": expo, "basket_vol": basket_vol, "equity_weight": eq_w, "trend_switch": switch,
             "trend_sleeve": sleeve if ups else 0.0, "cash": max(0.0, 1 - eq_w - (sleeve if ups else 0.0)),
             "trend_assets_up": ups}
     if trend_rows:

@@ -211,3 +211,5 @@ summary { cursor: pointer; font-weight: 650; color: var(--ink-2); font-size: 14p
 @media (forced-colors: active) {
   .st::before, .glyph { forced-color-adjust: none; }
 }
+.buywatch { border: 1px solid var(--rule); border-radius: 10px; padding: 4px 14px 8px; margin: 18px 0; background: var(--surface); }
+.buywatch h2 { margin-top: 10px; }

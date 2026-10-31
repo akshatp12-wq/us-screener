@@ -17,6 +17,7 @@ from ..portfolio.construct import cost_bps, liquid_mask, select
 from ..scoring.composite import composite, signal_scores
 from ..signals.stock import compute_stock_signals, first_trade_dates, vol_beta
 from ..util import ann_stats
+from .factor_bt import trend_switch_multiplier
 from .metrics import capm, drawdown, equity_curve, newey_west_t
 
 log = logging.getLogger("screener.backtest")
@@ -38,7 +39,9 @@ def _port_return(w: pd.Series, nxt: pd.Series) -> tuple[float, float]:
 
 def run_stock_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dict,
                        insiders: pd.DataFrame | None = None, regime_hist: pd.DataFrame | None = None,
-                       bench: str = "SPY") -> dict:
+                       bench: str = "SPY", rf_m: pd.Series | None = None, members_fn=None) -> dict:
+    """`rf_m`: monthly T-bill return (decimal) paid on uninvested cash when backtest.cash_earns_tbill.
+    `members_fn(t)`: optional set of tickers eligible at month end t (point-in-time index membership)."""
     bt = cfg["backtest"]
     ret_d = panels["ret"]
     ret_m = (1 + ret_d.fillna(0)).resample("ME").prod() - 1
@@ -60,6 +63,10 @@ def run_stock_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
     prev_w = {m: pd.Series(dtype=float) for m in cfg["modes"]}
     ar_state = {"val": 1.0, "peak": 1.0, "braked": False}
     trend_assets = cfg["trend"]["assets"]
+    pay_rf = bool(bt.get("cash_earns_tbill")) and rf_m is not None
+    mkt_m = (1 + mkt.fillna(0)).resample("ME").prod() - 1
+    tsw = trend_switch_multiplier(mkt_m, cfg["modes"]["absolute_return"])
+    member_cov = []
 
     for t in dates:
         nxt = _next_month_returns(ret_m, t)
@@ -73,8 +80,15 @@ def run_stock_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
                                    mkt_symbol=bench, ret_m=ret_m.loc[:t], vb=vb, first_dates=fd)
         alive = ret_d[df.index].loc[:t].iloc[-5:].notna().any()
         df = df[alive.reindex(df.index).fillna(False)]
+        if members_fn is not None:
+            mem = members_fn(t)
+            if mem:
+                member_cov.append((nd, len(mem & set(df.index)) / len(mem)))
+                df = df[df.index.isin(mem)]
         if len(df) < 100:
             continue
+        rf_next = float(rf_m.get(nd, 0.0)) if pay_rf else 0.0
+        rf_next = 0.0 if np.isnan(rf_next) else rf_next
         sc = signal_scores(df, cfg)
         liq = liquid_mask(df, cfg).fillna(False)
         uni_r = nxt.reindex(df.index[liq])
@@ -131,6 +145,7 @@ def run_stock_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
                 basket = ret_d[names].loc[:t].iloc[-63:].mean(axis=1)
                 bvol = float(basket.std() * np.sqrt(252)) or 0.15
                 expo = min(mc["max_leverage"], mc["target_vol"] / bvol) * mult
+                expo *= float(tsw.asof(t)) if len(tsw.loc[:t]) else 1.0
                 w = pd.Series(expo * (1 - mc["trend_sleeve_share"]) / len(names), index=names)
                 prev[mode] = names
                 ups = []
@@ -145,8 +160,9 @@ def run_stock_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
                     w = pd.concat([w, pd.Series(mc["trend_sleeve_share"] / len(ups), index=ups)])
             r, cov = _port_return(w, nxt)
             if mode != "market_neutral":
-                cash = 1 - w.sum()
-                r += cash * 0.0  # cash earns ~0 here (conservative; T-bill not added)
+                r += (1 - w.sum()) * rf_next          # uninvested cash (0 unless cash_earns_tbill)
+            else:
+                r += rf_next                          # interest on collateral / short proceeds
             # costs
             allt = w.index.union(prev_w[mode].index)
             dw = (w.reindex(allt).fillna(0) - prev_w[mode].reindex(allt).fillna(0)).abs()
@@ -157,7 +173,7 @@ def run_stock_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
             net = r - cost
             if mode == "absolute_return":
                 if ar_state["braked"]:
-                    net *= mc["drawdown_exposure"]
+                    net = net * mc["drawdown_exposure"] + (1 - mc["drawdown_exposure"]) * rf_next
                 ar_state["val"] *= 1 + net
                 ar_state["peak"] = max(ar_state["peak"], ar_state["val"])
                 dd = ar_state["val"] / ar_state["peak"] - 1
@@ -202,6 +218,8 @@ def run_stock_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
             res["universe"]["survivorship_gap"] = ann_stats(ew_s - rsp_m.reindex(ew_s.index))
         if spy_m is not None:
             res["universe"]["spy"] = ann_stats(spy_m.reindex(ew_s.index))
+    if member_cov:
+        res["membership_coverage"] = float(np.mean([c for _, c in member_cov]))
     cv = pd.DataFrame(coverage, columns=["date", "gpa", "bm"]).set_index("date") if coverage else None
     if cv is not None:
         res["coverage"] = {"gross_profitability": float(cv["gpa"].mean()), "book_to_market": float(cv["bm"].mean())}
@@ -209,6 +227,8 @@ def run_stock_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         "Universe = today's S&P 1500 constituents (survivorship-biased). 'survivorship_gap' = equal-weighted "
         "universe minus RSP (equal-weighted S&P 500 ETF): an estimate of how much the universe itself is flattered.",
         "Short interest is excluded (FINRA free files only cover listed stocks from mid-2021).",
-        "Cash in long-only modes earns 0 (T-bills not added); costs are bps by liquidity bucket on turnover.",
+        ("Uninvested cash earns the 1-month T-bill rate (Ken French RF); market-neutral earns it on collateral."
+         if pay_rf else "Cash in long-only modes earns 0 (T-bills not added).") +
+        " Costs are bps by liquidity bucket on turnover.",
     ]
     return res

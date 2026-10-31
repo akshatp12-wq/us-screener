@@ -4,10 +4,10 @@
   const DATA = "data/";
   const POLL_MS = 5 * 60 * 1000;
   const FILES = ["regime", "bubble", "stocks", "etfs", "portfolio", "events", "backtest", "validation",
-    "stock_backtest", "track", "methodology", "crashes"];
-  const S = { manifest: null, data: {}, mode: "long_term", page: "regime", stockLimit: 60,
+    "stock_backtest", "track", "methodology", "crashes", "compare"];
+  const S = { manifest: null, data: {}, mode: "absolute_return", page: "regime", stockLimit: 60,
     sort: { key: "score", dir: -1 }, filters: { sector: "", flag: "", liquid: true, q: "" }, open: new Set() };
-  const MODES = { long_term: "Long-term", market_neutral: "Market-neutral L/S", absolute_return: "Absolute return" };
+  const MODES = { absolute_return: "Absolute return", long_term: "Long-term", market_neutral: "Market-neutral (research)" };
   const $ = (s, r = document) => r.querySelector(s);
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const isNum = (v) => typeof v === "number" && isFinite(v);
@@ -200,11 +200,19 @@
       <div class="hero-band" aria-hidden="true"><i style="left:calc(${pos}% - 2px)"></i></div>
       <p class="hero-meta">${esc(cap(g.reasons.join("; ")))}. Risk multiplier for absolute-return mode: <b>${num(g.multiplier, 2)}×</b>.
       ${g.missing_inputs && g.missing_inputs.length ? `<br><span class="small">Missing inputs: ${esc(g.missing_inputs.join(", "))}.</span>` : ""}</p>
-      <p class="small">Fragile = credit warning (gap or red zone) and Stretched. Stretched = euphoric sentiment or ≥20% of sector/industry ETFs bubble-flagged.</p>
+      <p class="small">A reading of risk now, not a forecast of when a fall starts: historically the label mostly turned at or after peaks. Fragile = credit warning (gap or red zone) and Stretched. Stretched = euphoric sentiment, ≥20% of sector/industry ETFs bubble-flagged, or a credit warning on its own.</p>
       ${ev && ev.this_week && ev.this_week.length ? `<p><span class="flag">Event this week</span> ${ev.this_week.slice(0, 4).map((e) => esc(e.type + (e.ticker ? " " + e.ticker : "") + " " + e.date.slice(5))).join(", ")}</p>` : ""}
     </section>`;
-    const order = [["Macro and financial stability", ["credit_gap", "red_zone_business", "red_zone_household", "yield_curve", "ebp", "cape"]],
-      ["Sentiment and risk appetite", ["sentiment", "vrp"]], ["Crash monitor", ["crash_guard"]]];
+    const bw = r.dials.buy_watch;
+    if (bw && bw.state) {
+      h += `<section class="buywatch" aria-label="Buy watch"><h2>Buy watch: ${esc(bw.state)}${bw.capitulation ? ' <span class="flag">Capitulation</span>' : ""}</h2>
+        <p>${esc(bw.text)}</p>
+        <div class="kv"><div><span>Drawdown now</span><b>${spct(bw.drawdown_now)}</b></div><div><span>Worst in 12 months</span><b>${spct(bw.worst_drawdown_lookback)}</b></div>
+        <div><span>Above 10-month average</span><b>${bw.above_sma ? "Yes" : "No"}</b></div><div><span>VIX</span><b>${num(bw.vix, 1)}</b></div></div>
+        <p class="small">Rule: ${esc(bw.rule)}. Capitulation flag: ${esc(bw.capitulation_rule)}. ${esc(bw.use)} ${info(bw.cite)}</p></section>`;
+    }
+    const order = [["Drive the label and position sizing", ["credit_gap", "red_zone_business", "red_zone_household", "sentiment"]],
+      ["Context only (not used in the label)", ["cape", "yield_curve", "ebp", "vrp"]], ["Crash monitor", ["crash_guard"]]];
     order.forEach(([title, keys]) => {
       h += `<h2>${esc(title)}</h2><ul class="dials">`;
       keys.forEach((k) => { const d = r.dials[k]; if (d) h += dialRow(d); });
@@ -231,7 +239,7 @@
     const p = isNum(d.percentile) ? `<div class="pct" title="Percentile vs history"><i style="left:calc(${(d.percentile * 100).toFixed(1)}% - 1px)"></i></div><span class="pct-label">${pct(d.percentile, 0)} percentile of history</span>` : "";
     return `<li class="dial">
       <span class="glyph ${esc(d.status)}" aria-hidden="true">${{ green: "●", amber: "▲", red: "◆" }[d.status] || "○"}</span>
-      <div><div class="dial-title">${esc(d.title)}</div></div>
+      <div><div class="dial-title">${esc(d.title)}</div>${d.info_only ? '<span class="small">Info only</span>' : ""}</div>
       <div class="dial-value"><b>${esc(val)}</b>${st(d.status)}</div>
       <div class="dial-sub">${esc(sub)}${esc(d.threshold || "")}<br><span class="small">${esc(d.source)} · ${esc(d.frequency)}${d.as_of ? " · as of " + esc(d.as_of) : ""}</span> ${info(d.cite + " — " + (d.formula || ""))}</div>
       <div class="dial-viz">${sparkSVG(d.sparkline, { label: d.title })}${p}</div>
@@ -326,6 +334,7 @@
     const m = p.modes[S.mode] || {};
     let h = `<h1>Model portfolio</h1><div class="controls">${modeSeg()}</div>`;
     if (m.status === "unavailable") return h + `<p class="empty">${esc(m.reason)}</p>`;
+    if (m.research_only) h += `<p class="verdict">Research only. Market-neutral lost money at the stock level since 2011 (and has been roughly flat at the factor level since 2010), so this portfolio is tracked but not recommended.</p>`;
     const s = m.summary || {}, t = m.turnover || {}, meta = m.meta || {};
     h += `<div class="kv"><div><span>Holdings</span><b>${s.n ?? "–"}</b></div><div><span>Gross / net exposure</span><b>${pct(s.gross, 0)} / ${pct(s.net, 0)}</b></div>
       <div><span>Portfolio beta</span><b>${num(s.beta)}</b></div><div><span>Turnover vs last run</span><b>${t.first_build ? "First build" : pct(t.turnover, 0)}</b></div>
@@ -354,10 +363,43 @@
     if (!s || !isNum(s.cagr)) return `<tr><td>${esc(name)}</td><td colspan="6" class="small">Unavailable</td></tr>`;
     return `<tr><td>${esc(name)}</td><td class="num ${cls(s.cagr)}">${spct(s.cagr)}</td><td class="num">${pct(s.ann_vol)}</td><td class="num">${num(s.sharpe)}</td><td class="num neg">${spct(s.max_dd, 0)}</td><td class="num">${pct(s.hit_rate, 0)}</td>${extra}</tr>`;
   }
+  function compareSection() {
+    const c = S.data.compare;
+    if (!c || !c.factor || !c.factor.verdicts) return "";
+    const g = (x) => isNum(x) ? (x > 0 ? "+" : "") + x.toFixed(2) : "–";
+    const V = c.factor.verdicts;
+    let h = `<h2>Version 2 vs version 1</h2><p class="lede small">${esc(c.rule)}</p>
+      <div class="table-wrap"><table><thead><tr><th>Change</th><th class="num">Abs. return Sharpe, 1963–2010 (added / kept)</th><th class="num">Long-term Sharpe, 1963–2010</th><th class="num">Abs. return Sharpe, 2011+</th><th>Holds up?</th></tr></thead><tbody>`;
+    Object.entries(V).forEach(([k, v]) => {
+      const a = v.absolute_return, l = v.long_term;
+      h += `<tr><td>${esc(v.label)}</td><td class="num">${a.changed ? g(a.sharpe_gain_added_to_v1["1963-2010"]) + " / " + g(a.sharpe_gain_kept_in_v2["1963-2010"]) : "no effect"}</td>
+        <td class="num">${l.changed ? g(l.sharpe_gain_added_to_v1["1963-2010"]) + " / " + g(l.sharpe_gain_kept_in_v2["1963-2010"]) : "no effect"}</td>
+        <td class="num">${a.changed ? g(a.sharpe_gain_added_to_v1["2011-now"]) + " / " + g(a.sharpe_gain_kept_in_v2["2011-now"]) : "–"}</td>
+        <td>${v.holds_up_1963_2010 ? st("green", "Yes") : st("red", "No")}</td></tr>`;
+    });
+    h += `</tbody></table></div>`;
+    const fv = c.factor.variants;
+    const row = (name) => ["absolute_return", "long_term"].map((m) => ["1963-2010", "2011-now"].map((p) => {
+      const x = (fv[name] && fv[name][m] && fv[name][m][p]) || {};
+      return `<td class="num">${pct(x.cagr)}</td><td class="num">${num(x.sharpe)}</td><td class="num neg">${pct(x.max_dd, 0)}</td>`;
+    }).join("")).join("");
+    h += `<div class="table-wrap"><table><thead><tr><th rowspan="2">Factor level</th><th colspan="6">Absolute return: 1963–2010 | 2011+ (CAGR, Sharpe, max DD)</th><th colspan="6">Long-term: 1963–2010 | 2011+</th></tr></thead><tbody>
+      <tr><td>Version 1</td>${row("v1")}</tr><tr><td>Version 2</td>${row("v2")}</tr></tbody></table></div>`;
+    const sr = c.stock && c.stock.runs;
+    if (sr) {
+      h += `<div class="table-wrap"><table><thead><tr><th>Stock level since 2011</th><th class="num">Abs. return CAGR</th><th class="num">Sharpe</th><th class="num">Max DD</th><th class="num">Long-term CAGR</th><th class="num">vs SPY</th><th class="num">SUE spread (t)</th><th class="num">Insider spread (t)</th></tr></thead><tbody>` +
+        Object.entries(sr).map(([k, x]) => { const a = x.modes.absolute_return || {}, l = x.modes.long_term || {}, su = x.signals.sue || {}, ins = x.signals.insiders || {};
+          return `<tr><td>${esc(k)}${isNum(x.membership_coverage) ? ` <span class="small">(${pct(x.membership_coverage, 0)} of members priced)</span>` : ""}</td><td class="num">${pct(a.cagr)}</td><td class="num">${num(a.sharpe)}</td><td class="num neg">${pct(a.max_dd, 0)}</td><td class="num">${pct(l.cagr)}</td><td class="num ${cls(l.excess_vs_spy)}">${spct(l.excess_vs_spy)}</td><td class="num">${spct(su.spread)} (${num(su.t, 1)})</td><td class="num">${spct(ins.spread)} (${num(ins.t, 1)})</td></tr>`; }).join("") +
+        `</tbody></table></div>`;
+    }
+    return h;
+  }
+
   function pageBacktests() {
     const b = S.data.backtest, v = S.data.validation, sb = S.data.stock_backtest, tr = S.data.track;
     let h = `<h1>Backtests and track record</h1><p class="lede">Does each piece do what it claims? Factor results use Ken French's CRSP portfolios (survivorship-free, since 1963). Stock-level results run the actual screener on point-in-time SEC data but on today's S&P 1500 (survivorship-biased).</p><div class="controls">${modeSeg()}</div>`;
     if (!b || !b.factor) return h + unavailable("The backtest");
+    h += compareSection();
     const f = b.factor, md = f.modes[S.mode];
     if (md) {
       h += `<h2>${esc(MODES[S.mode])}: factor-level proxy vs market</h2><p class="small">${esc(md.note)}</p>

@@ -181,3 +181,20 @@ def dollar_volume(panels: dict, window: int = 63) -> pd.Series:
         return pd.Series(dtype=float)
     dv = (panels["close"] * panels["volume"]).iloc[-window:]
     return dv.median()
+
+
+def yahoo_market_caps(tickers: list[str]) -> dict[str, float]:
+    """Total market cap from Yahoo (all share classes) for a short list of tickers."""
+    import yfinance as yf
+    out = {}
+    for t in tickers:
+        try:
+            v = yf.Ticker(t).fast_info.get("market_cap")
+            if v and np.isfinite(v) and v > 0:
+                out[t] = float(v)
+        except Exception as e:  # noqa: BLE001
+            log.warning("yahoo market cap %s failed: %s", t, e)
+        time.sleep(0.3)
+    record("Yahoo market caps (fallback)", status="ok" if out else "error", rows=len(out),
+           error=None if out else "no market caps returned")
+    return out
