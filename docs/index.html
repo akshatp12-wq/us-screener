@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>US Screener</title>
+<meta name="description" content="Evidence-based US stock and ETF screener: market regime dials, factor rankings, model portfolios and historical validation. Not investment advice.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..900&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%2318202B'/%3E%3Cpath d='M6 22 L12 15 L17 19 L26 9' stroke='%23fbfcfd' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+</head>
+<body>
+<a class="skip" href="#main">Skip to content</a>
+<header class="top">
+  <div class="top-row">
+    <a class="brand" href="#regime">US Screener</a>
+    <div class="updated" aria-live="polite">
+      <span id="updated-label">Loading data…</span>
+      <button id="theme-toggle" class="icon-btn" type="button" aria-label="Switch colour theme">◐</button>
+    </div>
+  </div>
+  <p class="advice">Research tool, not investment advice. Backtests are hypothetical; past results don't predict future returns.</p>
+</header>
+<nav class="tabs-bar" aria-label="Pages"><div class="tabs">
+    <a href="#regime" data-page="regime">Regime</a>
+    <a href="#bubbles" data-page="bubbles">Bubble watch</a>
+    <a href="#stocks" data-page="stocks">Stocks</a>
+    <a href="#etfs" data-page="etfs">ETFs</a>
+    <a href="#portfolio" data-page="portfolio">Portfolio</a>
+    <a href="#backtests" data-page="backtests">Backtests</a>
+    <a href="#methodology" data-page="methodology">Methodology</a>
+    <a href="#health" data-page="health">Data health</a>
+</div></nav>
+<main id="main" tabindex="-1">
+  <div id="view" class="view"><p class="empty">Loading…</p></div>
+</main>
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<script src="js/app.js"></script>
+</body>
+</html>
