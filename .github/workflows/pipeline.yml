@@ -1,0 +1,131 @@
+name: Pipeline
+
+# One workflow, three schedules (UTC). GitHub cron is best-effort and has a 5-minute minimum;
+# minutes are chosen off the top of the hour to avoid the busiest slots.
+on:
+  schedule:
+    - cron: "7,37 13-21 * * 1-5"   # intraday: ETFs, sentiment, regime (skipped outside NYSE hours)
+    - cron: "23 22 * * 1-5"        # nightly: full rebuild after the close
+    - cron: "41 9 * * 6"           # weekly: backtests and validation (Saturday)
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job to run"
+        type: choice
+        options: [all, nightly, intraday, weekly]
+        default: all
+
+permissions:
+  contents: write
+  issues: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pipeline
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 170
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pick job
+        id: pick
+        run: |
+          case "${{ github.event.schedule }}" in
+            "7,37 13-21 * * 1-5") J=intraday ;;
+            "23 22 * * 1-5")      J=nightly ;;
+            "41 9 * * 6")         J=weekly ;;
+            *)                    J="${{ inputs.job || 'all' }}" ;;
+          esac
+          echo "job=$J" >> "$GITHUB_OUTPUT"
+          echo "Running job: $J"
+
+      - name: Market hours check
+        id: market
+        if: steps.pick.outputs.job == 'intraday' && github.event_name == 'schedule'
+        run: python3 .github/scripts/market_open.py || echo "skip=true" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v5
+        if: steps.market.outputs.skip != 'true'
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        if: steps.market.outputs.skip != 'true'
+        run: pip install -r requirements.txt
+
+      - name: Restore data cache
+        if: steps.market.outputs.skip != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: .cache
+          key: data-${{ github.run_id }}
+          restore-keys: data-
+
+      - name: Run pipeline
+        id: pipe
+        if: steps.market.outputs.skip != 'true'
+        continue-on-error: true
+        env:
+          SEC_USER_AGENT: ${{ secrets.SEC_USER_AGENT }}
+          PYTHONUNBUFFERED: "1"
+        run: python pipeline/run.py --job ${{ steps.pick.outputs.job }}
+
+      - name: Save data cache
+        if: steps.market.outputs.skip != 'true' && steps.pick.outputs.job != 'intraday'
+        uses: actions/cache/save@v4
+        with:
+          path: .cache
+          key: data-${{ github.run_id }}
+
+      - name: Commit data
+        if: steps.market.outputs.skip != 'true'
+        run: |
+          git config user.name "screener-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/data
+          if git diff --cached --quiet; then
+            echo "No data changes"
+          else
+            git commit -q -m "data: ${{ steps.pick.outputs.job }} run $(date -u +%Y-%m-%dT%H:%MZ)"
+            for i in 1 2 3; do
+              git pull -q --rebase -X theirs origin "${GITHUB_REF_NAME}" && git push -q && break
+              sleep $((i * 5))
+            done
+          fi
+
+      - name: Configure Pages
+        if: steps.market.outputs.skip != 'true'
+        uses: actions/configure-pages@v5
+
+      - name: Upload dashboard
+        if: steps.market.outputs.skip != 'true'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+
+      - name: Deploy dashboard
+        id: deployment
+        if: steps.market.outputs.skip != 'true'
+        uses: actions/deploy-pages@v4
+
+      - name: Fail if a pipeline stage failed
+        if: steps.pipe.outcome == 'failure'
+        run: |
+          echo "::error::One or more pipeline stages failed. See the log above and docs/data/manifest.json."
+          exit 1
+
+      - name: Open an issue on failure
+        if: failure() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          WORKFLOW_NAME: "${{ github.workflow }} (${{ steps.pick.outputs.job }})"
+        run: .github/scripts/report_failure.sh
