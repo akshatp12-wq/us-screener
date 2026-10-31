@@ -108,6 +108,13 @@ def build_fundamentals(cfg, f, cache, univ):
     log.info("fundamentals snapshot: %d companies, %d universe matches, non-null counts %s", len(snap), matched, cov)
     from screener.data.cache import record
     record("SEC point-in-time", snapshot_companies=int(len(snap)), universe_matches=matched, non_null=cov)
+    try:
+        from screener.config import out_dir
+        sample = {t: int(c) for t, c in zip(univ["ticker"], univ["cik"]) if t in
+                  ("XOM", "CAT", "ACN", "F", "CMCSA", "META", "BRK-B", "AAPL", "GOOGL", "BKNG") and pd.notna(c)}
+        write_json(out_dir(cfg) / "diagnostics.json", {"generated": utcnow(), "sec": sec.diagnose(store, sample)})
+    except Exception as e:  # noqa: BLE001
+        log.warning("diagnostics failed: %s", e)
     return derived, snap
 
 
@@ -151,7 +158,7 @@ def stocks_payload(df, res, fl, whys, cfg, asof) -> dict:
             "px": r.get("price"), "dv": r.get("dollar_volume"), "mc": r.get("mcap"),
             "f": {k: sc.at[t, k] for k in sc.columns},
             "raw": {"bm": r.get("bm"), "ep": r.get("ep"), "mom": r.get("momentum"), "gpa": r.get("gpa"),
-                    "ag": r.get("asset_growth"), "iss": r.get("net_issuance"), "ins": r.get("insider_net"),
+                    "opa": r.get("opa"), "ag": r.get("asset_growth"), "iss": r.get("net_issuance"), "ins": r.get("insider_net"),
                     "si": r.get("si_ratio"), "dtc": r.get("days_to_cover"), "sue": r.get("sue"),
                     "vol": r.get("vol"), "beta": r.get("beta")},
             "m": {m: res[m].get(t) for m in cfg["modes"]},

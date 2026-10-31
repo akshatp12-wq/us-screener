@@ -258,7 +258,7 @@ def _toy_frame(n=40):
     rng = np.random.default_rng(6)
     t = [f"T{i}" for i in range(n)]
     return pd.DataFrame({"sector": ["A"] * (n // 2) + ["B"] * (n // 2), "bm": rng.random(n), "ep": rng.random(n),
-                         "momentum": rng.normal(0, 0.2, n), "gpa": rng.random(n), "asset_growth": rng.normal(0.05, 0.1, n),
+                         "momentum": rng.normal(0, 0.2, n), "gpa": rng.random(n), "opa": rng.random(n), "asset_growth": rng.normal(0.05, 0.1, n),
                          "net_issuance": rng.normal(0, 0.05, n), "young": [False] * (n - 2) + [True] * 2,
                          "insider_net": rng.integers(-1, 2, n).astype(float), "si_ratio": rng.random(n) * 0.3,
                          "days_to_cover": rng.random(n) * 10, "sue": rng.normal(0, 1, n), "vol": rng.random(n),

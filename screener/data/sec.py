@@ -30,12 +30,19 @@ CONCEPTS = {
                 ("us-gaap", "SalesRevenueNet"), ("us-gaap", "RevenueFromContractWithCustomerIncludingAssessedTax"),
                 ("us-gaap", "RevenuesNetOfInterestExpense")],
     "cogs": [("us-gaap", "CostOfRevenue"), ("us-gaap", "CostOfGoodsAndServicesSold"),
-             ("us-gaap", "CostOfGoodsSold"), ("us-gaap", "CostOfServices")],
+             ("us-gaap", "CostOfGoodsSold"), ("us-gaap", "CostOfServices"),
+             ("us-gaap", "CostOfGoodsAndServiceExcludingDepreciationDepletionAndAmortization")],
+    "operating_income": [("us-gaap", "OperatingIncomeLoss")],
     "gross_profit": [("us-gaap", "GrossProfit")],
-    "net_income": [("us-gaap", "NetIncomeLoss"), ("us-gaap", "ProfitLoss")],
+    "net_income": [("us-gaap", "NetIncomeLoss"), ("us-gaap", "ProfitLoss"),
+                   ("us-gaap", "NetIncomeLossAvailableToCommonStockholdersBasic")],
     "eps": [("us-gaap", "EarningsPerShareDiluted"), ("us-gaap", "EarningsPerShareBasic")],
-    "shares": [("dei", "EntityCommonStockSharesOutstanding"), ("us-gaap", "CommonStockSharesOutstanding")],
+    "shares": [("dei", "EntityCommonStockSharesOutstanding"), ("us-gaap", "CommonStockSharesOutstanding"),
+               ("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding")],
 }
+CONCEPTS_VERSION = 2  # bump when CONCEPTS changes: forces one re-extraction from the bulk archive
+# items where concepts must not be mixed within one company: use the first concept that has data
+EXCLUSIVE = {"shares"}
 INSTANT = {"assets", "equity", "shares"}
 FORMS = {"10-K", "10-Q", "10-K/A", "10-Q/A", "20-F", "40-F", "10-KT"}
 
@@ -58,7 +65,10 @@ def extract_facts(doc: dict) -> pd.DataFrame:
     facts = doc.get("facts", {})
     rows = []
     for item, cands in CONCEPTS.items():
+        found = False
         for prio, (tax, name) in enumerate(cands):
+            if found and item in EXCLUSIVE:
+                break
             node = facts.get(tax, {}).get(name)
             if not node:
                 continue
@@ -74,6 +84,7 @@ def extract_facts(doc: dict) -> pd.DataFrame:
                         continue
                     rows.append((cik, item, prio, x.get("start"), x.get("end"), x.get("val"),
                                  x.get("filed"), x.get("form")))
+                    found = True
     if not rows:
         return _typed(pd.DataFrame(columns=["cik", "item", "prio", "start", "end", "val", "filed", "form"]))
     df = pd.DataFrame(rows, columns=["cik", "item", "prio", "start", "end", "val", "filed", "form"])
@@ -96,6 +107,8 @@ def load_fundamentals(f: Fetcher, cfg: dict, cache: Path, ciks: list[int]) -> pd
     meta_p = cache / "sec_facts_meta.json"
     store = pd.read_pickle(store_p) if store_p.exists() else None
     meta = json.loads(meta_p.read_text()) if meta_p.exists() else {}
+    if meta.get("concepts_version") != CONCEPTS_VERSION:
+        store = None
     want = set(int(c) for c in ciks)
     have = set(store["cik"].unique()) if store is not None else set()
     today = date.today()
@@ -154,6 +167,7 @@ def load_fundamentals(f: Fetcher, cfg: dict, cache: Path, ciks: list[int]) -> pd
         record("SEC fundamentals", status="error", error="; ".join(errors)[:300] or "no data")
         return pd.DataFrame(columns=["cik", "item", "prio", "start", "end", "val", "filed", "form"])
     store.to_pickle(store_p)
+    meta["concepts_version"] = CONCEPTS_VERSION
     meta_p.write_text(json.dumps(meta))
     record("SEC fundamentals", status="ok" if not errors else "partial",
            companies=int(store["cik"].nunique()), refetched=len(to_fetch),
@@ -309,14 +323,15 @@ class AsOf:
 def derive_company(df: pd.DataFrame, min_q: int = 8) -> dict[str, AsOf]:
     """Per-company point-in-time series."""
     series = {it: instant_series(df, it) for it in INSTANT}
-    for it in ("revenue", "cogs", "gross_profit", "net_income"):
+    for it in ("revenue", "cogs", "gross_profit", "net_income", "operating_income"):
         series[f"{it}_ttm"] = ttm_series(quarterly_flows(df, it))
     if series["gross_profit_ttm"].empty and not series["revenue_ttm"].empty and not series["cogs_ttm"].empty:
         m = series["revenue_ttm"].merge(series["cogs_ttm"], on="end", suffixes=("_r", "_c"))
         series["gross_profit_ttm"] = pd.DataFrame({"end": m["end"], "val": m["val_r"] - m["val_c"],
                                                    "avail": m[["avail_r", "avail_c"]].max(axis=1)})
     series["sue"] = sue_series(quarterly_flows(df, "eps"), min_q)
-    keep = ("assets", "equity", "shares", "gross_profit_ttm", "net_income_ttm", "revenue_ttm", "sue")
+    keep = ("assets", "equity", "shares", "gross_profit_ttm", "net_income_ttm", "revenue_ttm",
+            "operating_income_ttm", "sue")
     return {k: AsOf(series[k]) for k in keep}
 
 
@@ -350,7 +365,8 @@ def snapshot(derived: dict[int, dict[str, AsOf]], when, max_age_days: int = 548)
     for cik, d in derived.items():
         rec = {"cik": cik}
         ends = {}
-        for k in ("assets", "equity", "shares", "gross_profit_ttm", "net_income_ttm", "revenue_ttm"):
+        for k in ("assets", "equity", "shares", "gross_profit_ttm", "net_income_ttm", "revenue_ttm",
+                  "operating_income_ttm"):
             v, e = d[k].get(w)
             ok = e is not None and not np.isnat(e) and (w - e) <= max_age
             rec[k] = float(v) if ok else None
@@ -454,3 +470,33 @@ def load_insiders(f: Fetcher, cfg: dict, cache: Path, since: str | None = None) 
     record("SEC Form 3/4/5", status="ok", rows=int(len(df)), quarters=len(frames),
            last_obs=str(df["filed"].max().date()), error=None if len(frames) > n - 2 else "; ".join(errs)[:300])
     return df
+
+
+def diagnose(store: pd.DataFrame, ciks: dict[str, int]) -> dict:
+    """Small per-company summary of raw facts and derived series (written to docs/data/diagnostics.json)."""
+    out = {}
+    st = _typed(store.copy())
+    for tkr, cik in ciks.items():
+        g = st[st["cik"] == cik]
+        if g.empty:
+            out[tkr] = {"cik": cik, "facts": 0}
+            continue
+        rep = {"cik": cik, "facts": int(len(g)), "items": {}}
+        for it, x in g.groupby("item"):
+            days = (x["end"] - x["start"]).dt.days
+            buckets = {"instant": int(days.isna().sum()), "q(80-100)": int(days.between(80, 100).sum()),
+                       "6m": int(days.between(170, 190).sum()), "9m": int(days.between(260, 285).sum()),
+                       "annual": int(days.between(350, 380).sum())}
+            tail = x.sort_values("end").tail(6)
+            rep["items"][it] = {"buckets": buckets, "concept_prio": sorted(set(int(v) for v in x["prio"])),
+                                "last": [[str(r.start.date()) if pd.notna(r.start) else None, str(r.end.date()),
+                                          float(r.val), str(r.filed.date()), r.form] for r in tail.itertuples()]}
+        try:
+            d = {k: v for k, v in (("q_net_income", quarterly_flows(g, "net_income")),
+                                     ("ttm_net_income", ttm_series(quarterly_flows(g, "net_income"))))}
+            rep["derived"] = {k: [[str(e.date()), float(v), str(a.date())] for e, v, a in
+                                  zip(x_["end"].tail(6), x_["val"].tail(6), x_["avail"].tail(6))] for k, x_ in d.items()}
+        except Exception as e:  # noqa: BLE001
+            rep["derived_error"] = f"{type(e).__name__}: {e}"
+        out[tkr] = rep
+    return out

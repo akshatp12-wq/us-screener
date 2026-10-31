@@ -293,7 +293,7 @@
         h += `<tr class="detail"><td></td><td colspan="${cols.length + 3}"><p><b>Why ranked:</b> ${esc((r.why || {})[S.mode] || "")}</p>
           <div class="kv"><div><span>Price</span><b>${isNum(r.px) ? "$" + r.px.toFixed(2) : "–"}</b></div><div><span>Market cap</span><b>${money(r.mc)}</b></div><div><span>$ volume / day</span><b>${money(r.dv)}</b></div>
           <div><span>Book / market</span><b>${num(x.bm)}</b></div><div><span>Earnings yield</span><b>${pct(x.ep)}</b></div><div><span>12–1 momentum</span><b class="${cls(x.mom)}">${spct(x.mom)}</b></div>
-          <div><span>Gross profit / assets</span><b>${pct(x.gpa)}</b></div><div><span>Asset growth</span><b>${spct(x.ag)}</b></div><div><span>Net issuance</span><b>${spct(x.iss)}</b></div>
+          <div><span>Gross profit / assets</span><b>${pct(x.gpa)}</b></div><div><span>Operating income / assets</span><b>${pct(x.opa)}</b></div><div><span>Asset growth</span><b>${spct(x.ag)}</b></div><div><span>Net issuance</span><b>${spct(x.iss)}</b></div>
           <div><span>Net opportunistic insiders</span><b>${isNum(x.ins) ? x.ins : "–"}</b></div><div><span>Short interest</span><b>${pct(x.si)}</b></div><div><span>Days to cover</span><b>${num(x.dtc, 1)}</b></div>
           <div><span>SUE</span><b>${num(x.sue)}</b></div><div><span>Volatility</span><b>${pct(x.vol, 0)}</b></div><div><span>Beta</span><b>${num(x.beta)}</b></div></div>
           <p class="small">Sub-industry: ${esc(r.si || "–")}. Sources: SEC companyfacts (filed dates), Yahoo prices, SEC Form 4, FINRA short interest.</p></td></tr>`;

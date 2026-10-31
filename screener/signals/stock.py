@@ -19,7 +19,8 @@ CITE = {
 DEFINITIONS = {
     "value": "Average within-sector percentile of book equity / market cap and TTM net income / market cap",
     "momentum": "Total return from t-12 to t-1 months",
-    "profitability": "TTM gross profit / total assets (SEC companyfacts, point-in-time)",
+    "profitability": "Within-sector percentile of TTM gross profit / assets (Novy-Marx), averaged with TTM "
+                     "operating income / assets where available (firms without cost of goods sold use the latter)",
     "investment": "Total asset growth over 1 year (lower ranks higher)",
     "issuance": "1-year log change in split-adjusted shares outstanding (lower ranks higher), "
                 "penalty for listings younger than 5 years",
@@ -140,10 +141,10 @@ def compute_stock_signals(univ: pd.DataFrame, fund: pd.DataFrame | None, panels:
     if fund is not None and not fund.empty and "cik" in df:
         f = fund.set_index("cik")
         for col in ("assets", "assets_1y", "equity", "shares", "shares_1y", "gross_profit_ttm",
-                    "net_income_ttm", "sue", "shares_end", "revenue_ttm"):
+                    "net_income_ttm", "sue", "shares_end", "revenue_ttm", "operating_income_ttm"):
             df[col] = df["cik"].map(f[col]) if col in f else np.nan
     for col in ("assets", "assets_1y", "equity", "shares", "shares_1y", "gross_profit_ttm", "net_income_ttm",
-                "sue", "revenue_ttm"):
+                "sue", "revenue_ttm", "operating_income_ttm"):
         if col not in df:
             df[col] = np.nan
         df[col] = pd.to_numeric(df[col], errors="coerce")
@@ -161,6 +162,7 @@ def compute_stock_signals(univ: pd.DataFrame, fund: pd.DataFrame | None, panels:
     df.loc[df["equity"] <= 0, "bm"] = np.nan
     df["ep"] = df["net_income_ttm"] / df["mcap"]
     df["gpa"] = df["gross_profit_ttm"] / df["assets"]
+    df["opa"] = df["operating_income_ttm"] / df["assets"]
     df["asset_growth"] = df["assets"] / df["assets_1y"] - 1
     ratio = (df["shares"] * f_now) / (df["shares_1y"] * f_1y)
     df["net_issuance"] = np.log(ratio.where(ratio > 0))

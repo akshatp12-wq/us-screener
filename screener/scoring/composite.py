@@ -25,7 +25,7 @@ def signal_scores(df: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     out = pd.DataFrame(index=df.index)
     out["value"] = pd.concat([r("bm"), r("ep")], axis=1).mean(axis=1, skipna=True)
     out["momentum"] = r("momentum")
-    out["profitability"] = r("gpa")
+    out["profitability"] = pd.concat([r("gpa"), r("opa") if "opa" in df else r("gpa")], axis=1).mean(axis=1, skipna=True)
     out["investment"] = r("asset_growth", -1)
     iss = r("net_issuance", -1)
     out["issuance"] = (iss - 0.25 * df["young"].fillna(False).astype(float)).clip(lower=0.0)

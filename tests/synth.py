@@ -253,6 +253,7 @@ def _company_facts(cik: int) -> dict:
     add("us-gaap", "Revenues", "USD", rev)
     add("us-gaap", "CostOfRevenue", "USD", cogs)
     add("us-gaap", "NetIncomeLoss", "USD", ni)
+    add("us-gaap", "OperatingIncomeLoss", "USD", [dict(x, val=x["val"] * 1.6) for x in ni])
     add("us-gaap", "EarningsPerShareDiluted", "USD/shares", eps)
     add("us-gaap", "Assets", "USD", assets)
     add("us-gaap", "StockholdersEquity", "USD", eq)
