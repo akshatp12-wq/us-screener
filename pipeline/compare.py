@@ -29,30 +29,48 @@ log = logging.getLogger("pipeline")
 
 V1_LT = {"value": 0.25, "profitability": 0.25, "investment": 0.20, "issuance": 0.20, "insiders": 0.10}
 V1_AR = {"value": 0.20, "profitability": 0.20, "investment": 0.15, "issuance": 0.15, "insiders": 0.10, "lowvol": 0.20}
+RW_LT = {"value": 0.25, "profitability": 0.25, "investment": 0.15, "issuance": 0.15, "insiders": 0.20}
+RW_AR = {"value": 0.20, "profitability": 0.25, "investment": 0.15, "issuance": 0.15, "insiders": 0.20, "lowvol": 0.05}
 
+# Each candidate change: `old` = v1 setting, `new` = proposed setting. v1 applies every `old`; v2 is
+# config.yaml as committed, which holds `new` for adopted changes and `old` for rejected ones.
 CHANGES = {
     "reweight": {
         "label": "Reweighted scores: insiders 10%->20%, low volatility 20%->5%, investment and issuance 20%->15% (long-term)",
-        "v1": {("modes", "long_term", "weights"): V1_LT, ("modes", "absolute_return", "weights"): V1_AR},
+        "old": {("modes", "long_term", "weights"): V1_LT, ("modes", "absolute_return", "weights"): V1_AR},
+        "new": {("modes", "long_term", "weights"): RW_LT, ("modes", "absolute_return", "weights"): RW_AR},
         "note": "At factor level insiders have no history, so this tests the rest of the reweighting.",
     },
     "trend_switch": {
         "label": "Absolute return: halve the stock sleeve when the market is below its 10-month average",
-        "v1": {("modes", "absolute_return", "trend_switch", "enabled"): False},
+        "old": {("modes", "absolute_return", "trend_switch", "enabled"): False},
+        "new": {("modes", "absolute_return", "trend_switch", "enabled"): True},
     },
     "credit_alone": {
         "label": "Regime: a red credit dial on its own raises the label to Stretched",
-        "v1": {("regime", "credit_alone_label"): "Calm"},
+        "old": {("regime", "credit_alone_label"): "Calm"},
+        "new": {("regime", "credit_alone_label"): "Stretched"},
     },
     "sue_release": {
         "label": "Earnings surprise timed to the press release (8-K 2.02) instead of the 10-Q",
-        "v1": {("signals", "sue", "release_dates"): False}, "stock_only": True,
+        "old": {("signals", "sue", "release_dates"): False},
+        "new": {("signals", "sue", "release_dates"): True}, "stock_only": True,
     },
     "cash_tbill": {
         "label": "Stock-level test pays T-bill interest on uninvested cash",
-        "v1": {("backtest", "cash_earns_tbill"): False}, "stock_only": True, "accounting": True,
+        "old": {("backtest", "cash_earns_tbill"): False},
+        "new": {("backtest", "cash_earns_tbill"): True}, "stock_only": True, "accounting": True,
     },
 }
+
+
+def adopted(cfg: dict, k: str) -> bool:
+    return all(_get(cfg, p) == v for p, v in CHANGES[k]["new"].items())
+
+
+def toggled(cfg: dict, k: str) -> dict:
+    """v2 with change k flipped: removed if adopted, added if not."""
+    return with_overrides(cfg, CHANGES[k]["old" if adopted(cfg, k) else "new"])
 PERIODS = {"1963-2010": ("1963-07-01", "2010-12-31"), "2011-now": ("2011-01-01", None), "full": ("1963-07-01", None)}
 MODES = ("long_term", "absolute_return")
 
@@ -70,7 +88,7 @@ def with_overrides(cfg: dict, ov: dict) -> dict:
 def v1_config(cfg: dict) -> dict:
     ov = {}
     for ch in CHANGES.values():
-        ov.update(ch["v1"])
+        ov.update(ch["old"])
     return with_overrides(cfg, ov)
 
 
@@ -123,8 +141,8 @@ def factor_compare(cfg, bundle, h, extra) -> dict:
     for k, ch in CHANGES.items():
         if ch.get("stock_only"):
             continue
-        variants[f"v1 + {k}"] = with_overrides(v1, {p: _get(cfg, p) for p in ch["v1"]})
-        variants[f"v2 - {k}"] = with_overrides(cfg, ch["v1"])
+        variants[f"v1 + {k}"] = with_overrides(v1, ch["new"])
+        variants[f"v2 {'-' if adopted(cfg, k) else '+'} {k}"] = toggled(cfg, k)
     res, mkt_stats = {}, None
     for name, c in variants.items():
         hv = regime_bt.relabel(h, c) if h is not None else None
@@ -140,10 +158,12 @@ def factor_compare(cfg, bundle, h, extra) -> dict:
     for k, ch in CHANGES.items():
         if ch.get("stock_only"):
             continue
-        v = {"label": ch["label"], "note": ch.get("note")}
+        v = {"label": ch["label"], "note": ch.get("note"), "adopted": adopted(cfg, k)}
+        tg = f"v2 {'-' if v['adopted'] else '+'} {k}"
+        with_k, without_k = ("v2", tg) if v["adopted"] else (tg, "v2")
         for m in MODES:
             add = {p: _better(res[f"v1 + {k}"][m].get(p), res["v1"][m].get(p)) for p in PERIODS}
-            drop = {p: _better(res["v2"][m].get(p), res[f"v2 - {k}"][m].get(p)) for p in PERIODS}
+            drop = {p: _better(res[with_k][m].get(p), res[without_k][m].get(p)) for p in PERIODS}
             dd_add = _dd(res[f"v1 + {k}"][m], res["v1"][m])
             v[m] = {"sharpe_gain_added_to_v1": add, "sharpe_gain_kept_in_v2": drop, "max_dd_gain_1963_2010": dd_add,
                     "changed": any(abs(x or 0) > 1e-4 for x in list(add.values()) + list(drop.values()))}
@@ -151,9 +171,10 @@ def factor_compare(cfg, bundle, h, extra) -> dict:
                 [v[m]["sharpe_gain_kept_in_v2"]["1963-2010"] for m in MODES if v[m]["changed"]]
         early = [x for x in early if x is not None]
         dd_ok = [v[m]["max_dd_gain_1963_2010"] for m in MODES if v[m]["changed"] and v[m]["max_dd_gain_1963_2010"] is not None]
-        # keep if risk-adjusted return does not get worse before 2011, or it cuts drawdowns materially for
-        # a small Sharpe cost (<= 0.02)
-        keep = bool(early) and (min(early) >= -0.005 or (min(early) >= -0.02 and dd_ok and min(dd_ok) >= 0.02))
+        # keep only with a real gain before 2011: Sharpe up >= 0.01 in one test and not down > 0.005 in the
+        # other, or drawdowns cut by 2+ points for a Sharpe cost of at most 0.02
+        keep = bool(early) and ((min(early) >= -0.005 and max(early) >= 0.01) or
+                                (min(early) >= -0.02 and bool(dd_ok) and min(dd_ok) >= 0.02))
         v["holds_up_1963_2010"] = keep
         verdicts[k] = v
     return {"variants": res, "market": mkt_stats, "verdicts": verdicts}
@@ -200,14 +221,10 @@ def stock_compare(cfg, f, cache, panels, h, rf) -> dict:
     if univ is None:
         return {"status": "unavailable", "reason": "universe unavailable"}
     _, der_v1, _ = stock_inputs(v1, f, cache, use_releases=False)
-    runs = {
-        "v1": (v1, der_v1, None),
-        "v2": (cfg, der_v2, None),
-        "v2 - reweight": (with_overrides(cfg, CHANGES["reweight"]["v1"]), der_v2, None),
-        "v2 - trend_switch": (with_overrides(cfg, CHANGES["trend_switch"]["v1"]), der_v2, None),
-        "v2 - credit_alone": (with_overrides(cfg, CHANGES["credit_alone"]["v1"]), der_v2, None),
-        "v2 - cash_tbill": (with_overrides(cfg, CHANGES["cash_tbill"]["v1"]), der_v2, None),
-    }
+    runs = {"v1": (v1, der_v1, None), "v2": (cfg, der_v2, None)}
+    for k in ("reweight", "trend_switch", "credit_alone", "cash_tbill"):
+        runs[f"v2 {'-' if adopted(cfg, k) else '+'} {k}"] = (toggled(cfg, k), der_v2, None)
+    membership_error = None
     if cfg["backtest"].get("pit_membership"):
         try:
             from screener.data.membership import load_changes, members_fn
@@ -216,7 +233,9 @@ def stock_compare(cfg, f, cache, panels, h, rf) -> dict:
             runs["v2, S&P 500 as of today"] = (cfg, der_v2, lambda t, cur=cur: cur)
             runs["v2, S&P 500 point-in-time"] = (cfg, der_v2, members_fn(cur, ch))
         except Exception as e:  # noqa: BLE001
-            log.warning("membership sensitivity skipped: %s", e)
+            import traceback
+            membership_error = f"{type(e).__name__}: {e} | {traceback.format_exc()[-800:]}"
+            log.warning("membership sensitivity skipped: %s", membership_error)
     out = {}
     for name, (c, der, mfn) in runs.items():
         t0 = time.time()
@@ -224,7 +243,7 @@ def stock_compare(cfg, f, cache, panels, h, rf) -> dict:
         sb = run_stock_backtest(univ, panels, der or {}, c, ins, hv, rf_m=rf, members_fn=mfn)
         out[name] = _stock_summary(sb)
         log.info("stock compare %s done in %.0fs", name, time.time() - t0)
-    return {"runs": out, "since": cfg["backtest"]["stock_level_start"]}
+    return {"runs": out, "since": cfg["backtest"]["stock_level_start"], "membership_error": membership_error}
 
 
 def run_compare(cfg, f, cache, out) -> list[str]:
@@ -251,11 +270,13 @@ def run_compare(cfg, f, cache, out) -> list[str]:
             extra[k] = _monthly(ret[sym])
     h = regime_bt.regime_history(macro_d, bundle.get("ind49"), mkt, cfg, bw, vix)
     payload = {"generated": utcnow(), "changes": {k: {"label": v["label"], "stock_only": bool(v.get("stock_only")),
-                                                      "accounting": bool(v.get("accounting"))} for k, v in CHANGES.items()},
+                                                      "accounting": bool(v.get("accounting")), "adopted": adopted(cfg, k)}
+                                                  for k, v in CHANGES.items()},
                "periods": {k: [a, b] for k, (a, b) in PERIODS.items()},
-               "rule": "Keep a change only if it does not lower the factor-level Sharpe ratio in 1963-2010, when added to "
-                       "v1 and when removed from v2 (or lowers it by at most 0.02 while cutting the worst drawdown by 2+ "
-                       "points). Changes with no pre-2011 data are judged on the stock-level test and flagged."}
+               "rule": "A change is adopted only if it raises the factor-level Sharpe ratio in 1963-2010 by at least 0.01 in "
+                       "one test (added to v1, or present vs absent in v2) and does not lower it by more than 0.005 in the "
+                       "other, or cuts the worst drawdown by 2+ points for a Sharpe cost of at most 0.02. Changes with no "
+                       "pre-2011 data are judged on the stock-level test since 2011 and flagged."}
     payload["factor"] = factor_compare(cfg, bundle, h, extra)
     if ret is not None and ret.shape[1] > 200:
         payload["stock"] = stock_compare(cfg, f, cache, panels, h, rf)

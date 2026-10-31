@@ -112,14 +112,17 @@ the Piotroski F-score, Altman Z, dividend yield, and most liquidity signals.
 
 ### Strategy modes
 
-- **Absolute return (default).** Weights: value .2, profitability .25, investment .15, issuance .15,
-  insiders .2, low volatility .05.
+- **Absolute return (default).** Weights: value .2, profitability .2, investment .15, issuance .15,
+  insiders .1, low volatility .2.
   - Exposure is volatility-targeted (Moreira & Muir 2017), then multiplied by the regime multiplier.
   - The stock sleeve is halved when the market closes a month below its 10-month average.
   - A trend sleeve takes 30%.
   - A drawdown brake engages at −15%.
-- **Long-term.** Weights: value .25, profitability .25, investment .15, issuance .15, insiders .2. Valuation
+- **Long-term.** Weights: value .25, profitability .25, investment .2, issuance .2, insiders .1. Valuation
   sets return expectations; the regime only changes concentration and gross exposure.
+
+A reweighting toward insiders (.2) and away from low volatility (.05) was tested for v2 and not adopted:
+it changed nothing before 2011 and lowered the long-term mode's stock-level return since 2011.
 - **Market-neutral long/short (research only).** Weights: value .2, momentum .2, profitability .2,
   investment .1, issuance .15, insiders .15, short interest .1. Tracked and backtested, but not offered
   as a model portfolio: it has been flat at the factor level since 2010 and lost money at the stock level.

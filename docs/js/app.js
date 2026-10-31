@@ -375,7 +375,7 @@
       h += `<tr><td>${esc(v.label)}</td><td class="num">${a.changed ? g(a.sharpe_gain_added_to_v1["1963-2010"]) + " / " + g(a.sharpe_gain_kept_in_v2["1963-2010"]) : "no effect"}</td>
         <td class="num">${l.changed ? g(l.sharpe_gain_added_to_v1["1963-2010"]) + " / " + g(l.sharpe_gain_kept_in_v2["1963-2010"]) : "no effect"}</td>
         <td class="num">${a.changed ? g(a.sharpe_gain_added_to_v1["2011-now"]) + " / " + g(a.sharpe_gain_kept_in_v2["2011-now"]) : "–"}</td>
-        <td>${v.holds_up_1963_2010 ? st("green", "Yes") : st("red", "No")}</td></tr>`;
+        <td>${v.holds_up_1963_2010 ? st("green", "Yes") : st("red", "No")}${v.adopted === false ? ' <span class="small">(not adopted)</span>' : ""}</td></tr>`;
     });
     h += `</tbody></table></div>`;
     const fv = c.factor.variants;

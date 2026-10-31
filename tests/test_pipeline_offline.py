@@ -91,6 +91,7 @@ def test_compare_job(patched):
     assert rc == 0, STAGE_ERRORS
     c = json.loads((patched / "out" / "compare.json").read_text())
     assert set(c["factor"]["verdicts"]) == {"reweight", "trend_switch", "credit_alone"}
+    assert c["factor"]["verdicts"]["reweight"]["adopted"] is False and c["changes"]["trend_switch"]["adopted"] is True
     assert "v1" in c["factor"]["variants"] and "1963-2010" in c["factor"]["variants"]["v1"]["absolute_return"]
     assert "v1" in c["stock"]["runs"] and "v2" in c["stock"]["runs"]
     assert "v2, S&P 500 point-in-time" in c["stock"]["runs"]

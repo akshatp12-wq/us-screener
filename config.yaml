@@ -264,8 +264,9 @@ signals:
 modes:
   long_term:
     label: Long-term
-    # v1: value .25, profitability .25, investment .20, issuance .20, insiders .10
-    weights: {value: 0.25, profitability: 0.25, investment: 0.15, issuance: 0.15, insiders: 0.20}
+    # A v2 reweighting (insiders .20, investment/issuance .15) was tested and NOT adopted: no gain
+    # before 2011 and it lowered this mode's stock-level return since 2011 (docs/data/compare.json).
+    weights: {value: 0.25, profitability: 0.25, investment: 0.20, issuance: 0.20, insiders: 0.10}
     portfolio: {n_by_regime: {Calm: 30, Stretched: 40, Fragile: 50}, gross_by_regime: {Calm: 1.0, Stretched: 0.9, Fragile: 0.8}}
   market_neutral:
     label: Market-neutral L/S
@@ -276,8 +277,8 @@ modes:
     portfolio: {n_long: 50, n_short: 50}
   absolute_return:
     label: Absolute return
-    # v1: value .20, profitability .20, investment .15, issuance .15, insiders .10, lowvol .20
-    weights: {value: 0.20, profitability: 0.25, investment: 0.15, issuance: 0.15, insiders: 0.20, lowvol: 0.05}
+    # Reweighting candidate (insiders .20, profitability .25, lowvol .05) tested and NOT adopted.
+    weights: {value: 0.20, profitability: 0.20, investment: 0.15, issuance: 0.15, insiders: 0.10, lowvol: 0.20}
     target_vol: 0.10
     max_leverage: 1.5
     trend_sleeve_share: 0.30
