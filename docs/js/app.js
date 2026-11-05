@@ -4,7 +4,7 @@
   const DATA = "data/";
   const POLL_MS = 5 * 60 * 1000;
   const FILES = ["regime", "bubble", "stocks", "etfs", "portfolio", "events", "backtest", "validation",
-    "stock_backtest", "track", "methodology", "crashes", "compare"];
+    "stock_backtest", "track", "methodology", "crashes", "compare", "leads", "leads_backtest"];
   const S = { manifest: null, data: {}, mode: "absolute_return", page: "regime", stockLimit: 60,
     sort: { key: "score", dir: -1 }, filters: { sector: "", flag: "", liquid: true, q: "" }, open: new Set() };
   const MODES = { absolute_return: "Absolute return", long_term: "Long-term", market_neutral: "Market-neutral (research)" };
@@ -308,6 +308,51 @@
     </li>`;
   }
 
+  // ------------------------------------------------------------------ lead indicators
+  const LEAD_ORDER = ["insider_cluster", "mispricing", "resid_mom", "earnings_reaction", "abnormal_volume"];
+  const leadStatus = (s) => st(s === "Validated" ? "green" : s === "Promising" ? "amber" : "unavailable", s || "Not yet tested");
+  function leadValue(k, r) {
+    if (!r) return "–";
+    if (k === "mispricing") return `${spct(r.v, 0)} <span class="small">fair value vs price</span>`;
+    if (k === "resid_mom") return `${num(r.v, 2)} <span class="small">z</span>`;
+    if (k === "insider_cluster") return `${isNum(r.v) ? r.v.toFixed(0) : "–"} buyers <span class="small">${money(r.value)}</span>`;
+    if (k === "earnings_reaction") return `${spct(r.v)} <span class="small">${esc(r.release || "")}</span>`;
+    if (k === "abnormal_volume") return `${isNum(r.v) ? Math.exp(r.v).toFixed(1) + "×" : "–"} <span class="small">5-day ${spct(r.ret_5d)}</span>`;
+    return num(r.v);
+  }
+  function leadPeriod(x) {
+    if (!x || !isNum(x.ann_mean)) return '<span class="small">no data</span>';
+    return `<span class="${cls(x.ann_mean)}">${spct(x.ann_mean)}</span> <span class="small">t ${num(x.t, 1)}</span>`;
+  }
+  function pageLeads() {
+    const L = S.data.leads, B = (S.data.leads_backtest || {}).leads || {};
+    if (!L || !L.leads) return unavailable("Lead indicators");
+    const ind = (S.data.leads_backtest || {}).industry_residual_momentum;
+    let h = `<h1>Lead indicators</h1><p class="lede">Stocks worth researching, flagged by five signals with published support. Each one is backtested on its own; none of them changes the mode scores. A flag is a reason to look closer, not a buy signal. ${xb("leads_overview", "How to use this page", null, "xp-link")}</p>
+      <p class="small">As of ${esc(L.asof)} · ${L.universe} liquid stocks (S&P 1500, $5M+/day, price above $5).</p>
+      <h2>${xb("lead_status", "Evidence")}</h2>
+      <div class="table-wrap"><table><thead><tr><th>Indicator</th><th>Status</th><th class="num">Flagged now</th><th class="num">Before 2011, flagged vs universe / yr</th><th class="num">2011 on</th><th class="num">Full period, net of costs</th><th class="num">Tested since</th></tr></thead><tbody>` +
+      LEAD_ORDER.filter((k) => L.leads[k]).map((k) => { const x = L.leads[k], b = B[k] || {}, f = b.flagged_minus_universe || {}, n = b.net_of_costs || {};
+        return `<tr><td>${xb(k, esc(x.label))}<span class="nm">${esc(x.short)}</span></td><td>${leadStatus(b.status || x.status)}<span class="nm" title="${esc(b.reason || x.reason || "")}">${esc(b.reason || x.reason || "")}</span></td>
+          <td class="num">${x.n_bull}${x.n_bear ? ` <span class="small">/ ${x.n_bear} bearish</span>` : ""}</td><td class="num">${leadPeriod(f.pre)}</td><td class="num">${leadPeriod(f.post)}</td><td class="num">${leadPeriod(n.full)}</td><td class="num small">${esc(b.first_month || "–")}</td></tr>`; }).join("") +
+      `</tbody></table></div>`;
+    if (ind && ind.residual && ind.residual.full) h += `<p class="small">Residual momentum on Ken French's 49 industries (survivorship-free): ${spct(ind.residual.pre && ind.residual.pre.ann_mean)} a year over the market before 2011 (t ${num(ind.residual.pre && ind.residual.pre.t, 1)}), ${spct(ind.residual.post && ind.residual.post.ann_mean)} since (t ${num(ind.residual.post && ind.residual.post.t, 1)}); raw momentum ${spct(ind.raw.pre && ind.raw.pre.ann_mean)} and ${spct(ind.raw.post && ind.raw.post.ann_mean)}.</p>`;
+    const conv = L.convergence || [];
+    h += `<h2>${xb("convergence", "Flagged by two or more indicators")}</h2>`;
+    h += conv.length ? `<div class="table-wrap"><table><thead><tr><th>Stock</th><th>Sector</th><th>Bullish leads</th></tr></thead><tbody>` +
+      conv.map((c) => `<tr><td><span class="tk">${esc(c.t)}</span><span class="nm">${esc(c.n)}</span></td><td class="small">${esc(c.s)}</td><td>${c.leads.map((k) => xb(k, esc((L.leads[k] || {}).label || k), c.t, "chip", false)).join(" ")}</td></tr>`).join("") +
+      `</tbody></table></div>` : `<p class="empty">No stock is flagged by two indicators today.</p>`;
+    LEAD_ORDER.filter((k) => L.leads[k]).forEach((k) => {
+      const x = L.leads[k];
+      const table = (rows, title) => rows.length ? `<div class="table-wrap"><table><thead><tr><th>${title}</th><th>Sector</th><th class="num">${esc(x.unit)}</th><th class="num">Percentile</th><th class="num">Price</th><th class="num">Market cap</th></tr></thead><tbody>` +
+        rows.map((r) => `<tr><td>${xb(k, `<span class="tk">${esc(r.t)}</span>`, r.t)}<span class="nm">${esc(r.n)}</span></td><td class="small">${esc(r.s)}</td><td class="num">${leadValue(k, r)}</td><td class="num">${pct(r.p, 0)}</td><td class="num">${isNum(r.px) ? "$" + r.px.toFixed(2) : "–"}</td><td class="num">${money(r.mc)}</td></tr>`).join("") +
+        `</tbody></table></div>` : `<p class="empty">Nothing flagged today.</p>`;
+      h += `<h2>${xb(k, esc(x.label))} ${leadStatus((B[k] || {}).status || x.status)}</h2><p class="small">${esc(x.short)}. Data for ${pct(x.coverage, 0)} of liquid stocks. ${x.n_bull} flagged${x.n_bull > x.bull.length ? `, top ${x.bull.length} shown` : ""}.</p>` + table(x.bull, "Flagged");
+      if (x.bear && x.bear.length) h += `<details><summary>Bearish side: ${x.n_bear} names at the other extreme</summary>${table(x.bear, "Bearish")}</details>`;
+    });
+    return h;
+  }
+
   function pageBubbles() {
     const b = S.data.bubble;
     if (!b || !b.rows) return unavailable("Bubble watch");
@@ -605,7 +650,7 @@
   }
 
   // ------------------------------------------------------------------ router + events
-  const PAGES = { regime: pageRegime, bubbles: pageBubbles, stocks: pageStocks, etfs: pageEtfs, portfolio: pagePortfolio,
+  const PAGES = { regime: pageRegime, leads: pageLeads, bubbles: pageBubbles, stocks: pageStocks, etfs: pageEtfs, portfolio: pagePortfolio,
     backtests: pageBacktests, crashes: pageCrashes, methodology: pageMethodology, health: pageHealth };
   function render() {
     const page = (location.hash || "#regime").slice(1);

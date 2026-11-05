@@ -131,6 +131,72 @@ def build_fundamentals(cfg, f, cache, univ):
     return derived, snap
 
 
+# ============================================================================= lead indicators
+@stage("lead indicators")
+def build_leads(cfg, f, cache, out, df, panels, insiders):
+    """Today's flagged names for each lead indicator -> leads.json (evidence from leads_backtest.json)."""
+    from screener.portfolio.construct import liquid_mask
+    from screener.signals import leads as ld
+    ret_d = panels["ret"]
+    asof = ret_d.index[-1]
+    lc = cfg["leads"]
+    factors = None
+    t = ms.safe(ms.french, f, cfg, cfg["backtest"]["french_files"]["ff3"], source="French:" + cfg["backtest"]["french_files"]["ff3"])
+    if t:
+        factors = ld.ff3_monthly(ms.french_table(t, "", "monthly"))
+    if factors is None and "SPY" in ret_d:   # fallback: market model on SPY
+        spy_m = (1 + ret_d["SPY"].fillna(0)).resample("ME").prod() - 1
+        factors = pd.DataFrame({"mkt": spy_m.iloc[:-1]})
+    ciks = df["cik"].dropna().astype(int).tolist() if "cik" in df else []
+    rel = ms.safe(sec.load_earnings_releases, f, cfg, cache, ciks, source="SEC earnings releases (8-K 2.02)") or {}
+    tick = [x for x in df.index if x in ret_d.columns]
+    recent = ret_d.iloc[-300:]
+    mkt = recent["SPY"] if "SPY" in recent else recent[tick].mean(axis=1)
+    reactions = ld.earnings_reactions(recent[tick], mkt, rel, df["cik"].to_dict() if "cik" in df else {})
+    L = ld.compute_leads(df, panels, asof, cfg, factors=factors, insiders=insiders, reactions=reactions,
+                         max_age_days=lc["earnings_reaction"]["live_max_age_days"])
+    liq = liquid_mask(df, cfg).fillna(False)
+    F = ld.flags(L, liq, cfg)
+    ev = (_read(out, "leads_backtest.json") or {}).get("leads", {})
+    n = int(lc["max_list"])
+
+    def row(tk, k):
+        v = L.at[tk, k]
+        col = L.loc[liq[liq].index, k].dropna()
+        r = {"t": tk, "n": df.at[tk, "name"] if "name" in df else "", "s": df.at[tk, "sector"] if "sector" in df else "",
+             "v": None if pd.isna(v) else float(v), "p": float((col <= v).mean()) if len(col) and pd.notna(v) else None,
+             "px": None if pd.isna(df.at[tk, "price"]) else float(df.at[tk, "price"]),
+             "mc": None if pd.isna(df.at[tk, "mcap"]) else float(df.at[tk, "mcap"])}
+        if k == "insider_cluster":
+            r["value"] = None if pd.isna(L.at[tk, "insider_value"]) else float(L.at[tk, "insider_value"])
+        if k == "earnings_reaction" and pd.notna(L.at[tk, "release"]):
+            r["release"] = pd.Timestamp(L.at[tk, "release"]).strftime("%Y-%m-%d")
+        if k == "abnormal_volume":
+            r["ret_5d"] = None if pd.isna(L.at[tk, "ret_5d"]) else float(L.at[tk, "ret_5d"])
+        return r
+
+    payload = {"generated": utcnow(), "asof": asof, "universe": int(liq.sum()), "leads": {}, "convergence": []}
+    hits: dict[str, list[str]] = {}
+    for k, meta in ld.LEADS.items():
+        fl = F.get(k, {"bull": pd.Index([]), "bear": pd.Index([])})
+        bull = L.loc[fl["bull"], k].sort_values(ascending=False)
+        bear = L.loc[fl["bear"], k].sort_values() if len(fl["bear"]) else pd.Series(dtype=float)
+        for tk in bull.index:
+            hits.setdefault(tk, []).append(k)
+        e = ev.get(k, {})
+        payload["leads"][k] = {
+            **meta, "status": e.get("status", "Not yet tested"), "reason": e.get("reason", "The weekly backtest has not run yet."),
+            "coverage": float(L.loc[liq[liq].index, k].notna().mean()) if k in L else 0.0,
+            "n_bull": int(len(bull)), "n_bear": int(len(bear)),
+            "bull": [row(tk, k) for tk in bull.index[:n]], "bear": [row(tk, k) for tk in bear.index[:n]],
+        }
+    conv = sorted(((tk, ks) for tk, ks in hits.items() if len(ks) >= 2), key=lambda x: -len(x[1]))
+    payload["convergence"] = [{"t": tk, "n": df.at[tk, "name"] if "name" in df else "", "s": df.at[tk, "sector"] if "sector" in df else "",
+                               "leads": ks} for tk, ks in conv[:40]]
+    write_json(out / "leads.json", payload)
+    return payload
+
+
 # ============================================================================= orchestration
 @stage("stock signals")
 def raw_stock_signals(cfg, univ, snap, panels, insiders, short):
@@ -440,6 +506,8 @@ def run_live(cfg, f, cache, out, full: bool) -> list[str]:
             write_json(out / "stocks.json", stocks_payload(df, res, fl, whys, cfg, panels["ret"].index[-1]))
             write_json(out / "events.json", events_payload(cfg, earnings))
             written += ["stocks.json", "events.json"]
+            if build_leads(cfg, f, cache, out, df, panels, insiders):
+                written.append("leads.json")
             mode_scores = {m: res[m] for m in cfg["modes"]}
             port = build_portfolios(cfg, df, res, whys, reg, panels, _read(out, "portfolio.json"))
             if port:

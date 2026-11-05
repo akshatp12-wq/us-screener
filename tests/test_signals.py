@@ -403,3 +403,84 @@ def test_buy_watch_states():
     res = buy_watch(mid, CFG)
     assert res["state"] == "Buy signal", res
     assert buy_watch(r.loc[:"2019-12-31"], CFG)["state"] == "No setup"
+
+
+# ----------------------------------------------------------------------------- lead indicators
+def test_mispricing_flags_the_cheap_stock():
+    from screener.signals.leads import mispricing
+    rng = np.random.default_rng(1)
+    n = 300
+    a = rng.uniform(1e9, 5e10, n)
+    eq = a * rng.uniform(0.2, 0.6, n)
+    ni = a * rng.uniform(-0.02, 0.12, n)
+    mcap = 1.5 * eq + 12 * ni.clip(0) + a * 0.1 * np.exp(rng.normal(0, 0.05, n))
+    df = pd.DataFrame({"assets": a, "equity": eq, "net_income_ttm": ni, "revenue_ttm": a * 0.8, "gross_profit_ttm": a * 0.3,
+                       "operating_income_ttm": a * 0.1, "mcap": mcap, "sector": ["A", "B", "C"] * 100},
+                      index=[f"S{i}" for i in range(n)])
+    df.loc["S7", "mcap"] *= 0.4          # priced at 40% of what fundamentals imply
+    df.loc["S8", "mcap"] *= 2.5          # priced well above
+    g = mispricing(df, 0.01, 100)
+    assert g.idxmax() == "S7" and g["S7"] > 0.5
+    assert g["S8"] < -0.4
+
+
+def test_residual_momentum_ranks_idiosyncratic_winner_first():
+    from screener.signals.leads import residual_momentum
+    rng = np.random.default_rng(2)
+    idx = pd.date_range("2015-01-31", periods=40, freq="ME")
+    f = pd.DataFrame({"mkt": rng.normal(0.008, 0.04, 40), "smb": rng.normal(0, 0.02, 40),
+                      "hml": rng.normal(0, 0.02, 40), "rf": 0.001}, index=idx)
+    r = pd.DataFrame({f"S{i}": 0.001 + 1.0 * f["mkt"] + rng.normal(0, 0.03, 40) for i in range(30)})
+    r.index = idx
+    r.iloc[-12:-1, 3] += 0.03             # steady stock-specific gains in the formation window
+    r.iloc[-12:-1, 4] += f["mkt"].iloc[-12:-1] * 2   # pure market beta, should not count as residual
+    s = residual_momentum(r, f, idx[-1], 36, 12, 1)
+    assert s.idxmax() == "S3"
+    assert s.rank(pct=True)["S3"] > s.rank(pct=True)["S4"]
+
+
+def test_insider_cluster_counts_distinct_net_buyers():
+    from screener.signals.leads import insider_cluster
+    d = pd.Timestamp("2024-06-28")
+    ins = pd.DataFrame({
+        "issuer_cik": [1, 1, 1, 1, 2, 2],
+        "owner_cik": [10, 11, 12, 13, 20, 21],
+        "trans_date": pd.to_datetime(["2024-06-01", "2024-06-10", "2024-05-20", "2024-06-20", "2024-06-05", "2024-03-01"]),
+        "filed": pd.to_datetime(["2024-06-03", "2024-06-12", "2024-05-22", "2024-07-02", "2024-06-07", "2024-03-03"]),
+        "side": [1, 1, -1, 1, 1, 1], "value": [1e5, 2e5, 5e5, 1e5, 3e4, 1e4]})
+    c = insider_cluster(ins, d, 60)
+    assert c.loc[1, "buyers"] == 2        # owner 12 sold; owner 13's filing comes after the date
+    assert c.loc[2, "buyers"] == 1        # owner 21 bought outside the window
+
+
+def test_earnings_reaction_measures_the_announcement_move():
+    from screener.signals.leads import earnings_reactions, latest_reaction
+    idx = pd.bdate_range("2024-01-01", periods=120)
+    ret = pd.DataFrame({"AAA": 0.0, "BBB": 0.0}, index=idx)
+    mkt = pd.Series(0.0, index=idx)
+    day0 = idx[60]
+    ret.loc[day0, "AAA"] = 0.08
+    ret.loc[day0, "BBB"] = -0.05
+    tab = earnings_reactions(ret, mkt, {1: np.array([day0], dtype="datetime64[ns]"), 2: np.array([day0], dtype="datetime64[ns]")},
+                             {"AAA": 1, "BBB": 2}, 1)
+    lr = latest_reaction(tab, idx[70], 75)
+    assert abs(lr.loc["AAA", "ear"] - 0.08) < 1e-9 and abs(lr.loc["BBB", "ear"] + 0.05) < 1e-9
+    assert latest_reaction(tab, idx[60], 75).empty   # window not closed yet on the announcement day
+
+
+def test_abnormal_volume_detects_spike():
+    from screener.signals.leads import abnormal_volume
+    idx = pd.bdate_range("2024-01-01", periods=80)
+    v = pd.DataFrame({"AAA": 1e6, "BBB": 1e6}, index=idx)
+    v.iloc[-5:, 0] = 3e6
+    a = abnormal_volume(v, idx[-1], 5, 50)
+    assert abs(a["AAA"] - np.log(3)) < 1e-9 and abs(a["BBB"]) < 1e-9
+
+
+def test_lead_status_rules():
+    from screener.backtest.leads_bt import lead_status
+    mk = lambda pre, post, t, n=60: {"pre": {"n": n, "ann_mean": pre}, "post": {"n": 150, "ann_mean": post}, "full": {"n": 150 + n, "t": t}}
+    assert lead_status(mk(0.04, 0.03, 3.4), CFG)["status"] == "Validated"
+    assert lead_status(mk(0.04, 0.03, 2.3), CFG)["status"] == "Promising"
+    assert lead_status(mk(-0.02, 0.05, 2.5), CFG)["status"] == "Unproven"
+    assert lead_status(mk(0.0, 0.05, 3.5, n=0), CFG)["status"] == "Promising"   # no pre-2011 data caps it

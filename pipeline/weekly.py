@@ -70,12 +70,23 @@ def stock_inputs(cfg, f, cache, use_releases: bool | None = None):
 
 
 @stage("stock-level backtest")
-def stock_stage(cfg, f, cache, panels, regime_hist, rf=None):
+def stock_stage(cfg, f, cache, panels, regime_hist, rf=None, inputs=None):
     from screener.backtest.stock_bt import run_stock_backtest
-    univ, derived, insiders = stock_inputs(cfg, f, cache)
+    univ, derived, insiders = inputs or stock_inputs(cfg, f, cache)
     if univ is None:
         return {"status": "unavailable", "reason": "universe unavailable"}
     return run_stock_backtest(univ, panels, derived or {}, cfg, insiders, regime_hist, rf_m=rf)
+
+
+@stage("lead indicators backtest")
+def leads_stage(cfg, f, cache, panels, bundle, inputs):
+    from screener.backtest.leads_bt import run_leads_backtest
+    univ, derived, insiders = inputs
+    if univ is None:
+        return {"status": "unavailable", "reason": "universe unavailable"}
+    rel = ms.safe(sec.load_earnings_releases, f, cfg, cache, univ["cik"].dropna().astype(int).tolist(),
+                  source="SEC earnings releases (8-K 2.02)")
+    return run_leads_backtest(univ, panels, derived or {}, cfg, insiders, rel, bundle.get("ff3"), bundle.get("ind49"))
 
 
 @stage("crash replay and buy timing")
@@ -194,10 +205,19 @@ def run_weekly(cfg, f, cache, out) -> list[str]:
     written += ["backtest.json", "validation.json"]
 
     if ret is not None and ret.shape[1] > 200:
-        sb = stock_stage(cfg, f, cache, panels, h, rf)
+        try:
+            inputs = stock_inputs(cfg, f, cache)
+        except Exception as e:  # noqa: BLE001
+            log.warning("stock inputs failed: %s", e)
+            inputs = (None, None, None)
+        sb = stock_stage(cfg, f, cache, panels, h, rf, inputs)
         if sb:
             write_json(out / "stock_backtest.json", {"generated": utcnow(), **sb})
             written.append("stock_backtest.json")
+        lb = leads_stage(cfg, f, cache, panels, bundle, inputs)
+        if lb:
+            write_json(out / "leads_backtest.json", {"generated": utcnow(), **lb})
+            written.append("leads_backtest.json")
     else:
         write_json(out / "stock_backtest.json", {"generated": utcnow(), "status": "unavailable",
                                                  "reason": "stock price panel not cached yet (run nightly first)"})

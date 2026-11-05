@@ -501,6 +501,109 @@
     M.c_composite = mE("Composite buy score", "An unfitted average of drawdown depth, credit-spread level, fear and cheapness.", "Q5 = strongest buy reading. A rising pattern from Q1 to Q5 means higher scores were followed by higher returns.", "It was not fitted to returns, so it cannot be overfitted, but it is also not optimised.", "This tool's own construction.");
     M.c_reserve = mE("Cash reserve for dips", "Holding 20% in T-bills and deploying it when a buy rule fires, compared with staying fully invested.", "Every variant beat holding static cash but trailed staying fully invested.", "Waiting for dips has cost more than it saved.", "This tool's own simulation, 1960 onward.");
 
+    // =================================================================== lead indicators
+    const LD = () => D().leads || {};
+    const LB = () => (D().leads_backtest || {}).leads || {};
+    const leadRow = (k, t) => { const x = (LD().leads || {})[k] || {}; return (x.bull || []).find((r) => r.t === t) ? { side: "bull", r: (x.bull || []).find((r) => r.t === t) } : (x.bear || []).find((r) => r.t === t) ? { side: "bear", r: (x.bear || []).find((r) => r.t === t) } : null; };
+    const leadsWith = (t) => ((LD().convergence || []).find((c) => c.t === t) || {}).leads || [];
+    const evid = (k) => {
+      const b = LB()[k];
+      if (!b || !b.flagged_minus_universe) return P("The weekly backtest has not produced results for this indicator yet.");
+      const f = b.flagged_minus_universe, n = b.net_of_costs || {}, per = (x) => x && H.isNum(x.ann_mean) ? `${spct(x.ann_mean)} a year (t = ${num(x.t, 1)}, ${x.n} months)` : "no data";
+      return P(`<b>Status: ${esc(b.status)}.</b> ${esc(b.reason || "")}.`) +
+        P(`Flagged names vs the liquid universe, next month: before 2011 ${per(f.pre)}; 2011 on ${per(f.post)}; full period net of costs ${per(n.full)}. On average ${num(b.avg_flagged, 0)} names were flagged and ${pct(b.avg_new_share, 0)} of them were new each month.`) +
+        (b.top30_minus_bottom30 ? P(`Top 30% minus bottom 30% of all liquid stocks: ${per(b.top30_minus_bottom30.full)}. Average rank IC ${num(b.ic_mean, 3)}.`) : "") +
+        (b.bearish_minus_universe ? P(`Bearish side (bottom 10%) vs universe: ${per(b.bearish_minus_universe.full)}.`) : "") +
+        P("Tested on today's S&P 1500, so survivorship bias remains, though comparing flagged names with the same universe cancels much of it.");
+    };
+    const leadNow = (k, ctx, generic, perStock) => {
+      const x = (LD().leads || {})[k];
+      if (ctx) {
+        const hit = leadRow(k, ctx);
+        if (hit) {
+          const others = leadsWith(ctx).filter((y) => y !== k);
+          return P(perStock(hit.r, hit.side)) + (others.length ? P(`${esc(ctx)} is also flagged by: ${others.map((y) => esc(((LD().leads || {})[y] || {}).label || y)).join(", ")}.`) : "") +
+            P(`This indicator's status: <b>${esc((LB()[k] || {}).status || (x || {}).status || "not yet tested")}</b>. A flag is a reason to research the company, not a buy signal.`);
+        }
+      }
+      return P(generic) + (x ? P(`Today: ${x.n_bull} stocks flagged${x.n_bear ? ` and ${x.n_bear} on the bearish side` : ""}; data for ${pct(x.coverage, 0)} of liquid stocks. Status: <b>${esc((LB()[k] || {}).status || x.status)}</b>.`) : "");
+    };
+    M.mispricing = {
+      title: "Fundamental mispricing",
+      short: "How far a company's market value sits from the value implied by its balance sheet and earnings, compared with similar companies in its sector.",
+      now: (ctx) => leadNow("mispricing", ctx,
+        "Each day the tool fits one model across all stocks: market value (scaled by total assets) explained by equity, liabilities, revenue, gross profit, operating income, profits, losses and the sector. A stock's fair value is what that model predicts. The top 10% by fair value over price are flagged as cheap, and the bottom 10% as expensive.",
+        (r, side) => `<b>${esc(r.t)}: fundamentals imply a value ${spct(r.v, 0)} ${r.v >= 0 ? "above" : "versus"} its market value</b>, which puts it in the ${pct(r.p, 0)} percentile (${side === "bull" ? "cheap end" : "expensive end"}). Market cap ${H.isNum(r.mc) ? "$" + (r.mc / 1e9).toFixed(1) + "B" : "–"}. Large gaps are often explained by things the model cannot see (a pending lawsuit, a one-off gain, a business in decline), so check the filings.`),
+      use: "Use the cheap list as a starting point for valuation work. The model is a comps regression without judgment; large gaps can be data errors or real problems.",
+      origin: P("Bartram and Grinblatt (2018) estimated each stock's fair value every month by regressing market capitalization on a few dozen accounting items across all US stocks, with no theory about which items matter (hence 'agnostic'). Stocks trading below fair value earned significantly higher returns, which standard risk factors did not explain. A 2021 follow-up by the same authors found similar results in international markets. This tool uses a smaller set of items, scales them by total assets so mega caps do not dominate the fit, and adds sector effects."),
+      held: P("The method is recent, so independent out-of-sample evidence is limited. Like other value-type signals it can take a long time to pay off, and errors in reported financial data create false positives."),
+      ours: () => evid("mispricing"),
+      refs: ["Bartram & Grinblatt (2018), Agnostic Fundamental Analysis Works, Journal of Financial Economics", "Bartram & Grinblatt (2021), Global Market Inefficiencies, Journal of Financial Economics"],
+    };
+    M.resid_mom = {
+      title: "Residual momentum",
+      short: "A stock's return over the past year (skipping the latest month) after removing what the market, size and value factors explain.",
+      now: (ctx) => leadNow("resid_mom", ctx,
+        "For each stock, 36 months of returns are regressed on the market, size and value factors. Residual momentum adds up the leftover, stock-specific returns from 12 months ago to last month, divided by their volatility. High values mean the company has been rising for its own reasons, not because it rode the market or a style.",
+        (r) => `<b>${esc(r.t)}: residual momentum ${num(r.v, 2)}</b> (${pct(r.p, 0)} percentile). Its stock-specific returns over the past year have been consistently positive relative to what its factor exposures would predict.`),
+      use: "A cleaner version of momentum that is less prone to sudden crashes. Useful for spotting companies with steady, company-specific improvement.",
+      origin: P("Grundy and Martin (2001) showed that much of momentum's risk comes from its changing factor exposures. Blitz, Huij and Martens (2011) ranked stocks on residual returns instead of total returns and found roughly twice the risk-adjusted profit of ordinary momentum, with smaller losses in momentum crashes such as 2009."),
+      held: P("Residual momentum has held up better than raw momentum in later studies, though, like all momentum strategies, it trades often, so costs matter."),
+      ours: () => {
+        const ind = (D().leads_backtest || {}).industry_residual_momentum || {};
+        const per = (x) => x && H.isNum(x.ann_mean) ? `${spct(x.ann_mean)} a year (t = ${num(x.t, 1)})` : "no data";
+        return evid("resid_mom") + (ind.residual ? P(`Survivorship-free check on 49 industries since 1963 (top 10 vs all): residual momentum ${per(ind.residual.pre)} before 2011 and ${per(ind.residual.post)} after; raw momentum ${per(ind.raw && ind.raw.pre)} and ${per(ind.raw && ind.raw.post)}. Worst month ${spct(ind.residual_worst_month)} vs ${spct(ind.raw_worst_month)} for raw momentum.`) : "");
+      },
+      refs: ["Blitz, Huij & Martens (2011), Residual Momentum, Journal of Empirical Finance", "Grundy & Martin (2001), Understanding the Nature of the Risks and the Source of the Rewards to Momentum Investing, Review of Financial Studies"],
+    };
+    M.insider_cluster = {
+      title: "Insider cluster buying",
+      short: "Two or more different insiders (officers or directors) buying the company's stock on the open market within 60 days.",
+      now: (ctx) => leadNow("insider_cluster", ctx,
+        "Counts distinct insiders whose open-market purchases exceeded their sales over the last 60 days, using SEC Form 4 filings available by today. Two or more is flagged. Insiders sell for many reasons (taxes, diversification, planned sales), but they generally buy for one: they think the stock is cheap.",
+        (r) => `<b>${esc(r.t)}: ${H.isNum(r.v) ? r.v.toFixed(0) : "–"} insiders bought in the last 60 days</b>, about ${H.isNum(r.value) ? "$" + (r.value >= 1e6 ? (r.value / 1e6).toFixed(1) + "M" : (r.value / 1e3).toFixed(0) + "K") : "–"} in total. Read the Form 4s: purchases by the CEO or CFO, with their own money, at size relative to their pay, carry the most information.`),
+      use: "One of the most direct lead indicators available. Check who bought, how much, and whether it was a planned or discretionary purchase.",
+      origin: P("Insider purchases have predicted returns in many studies (Seyhun 1986; Lakonishok & Lee 2001), while sales carry much less information. Cohen, Malloy and Pomorski (2012) showed the signal comes from opportunistic trades rather than routine ones. Requiring several insiders to buy at once is a common refinement; this tool tests it directly rather than assuming it adds value."),
+      held: P("Insider-purchase signals have survived for decades, though their returns concentrate in smaller companies, and S&P 1500 stocks have relatively few open-market purchases."),
+      ours: () => evid("insider_cluster"),
+      refs: ["Cohen, Malloy & Pomorski (2012), Decoding Inside Information, Journal of Finance", "Lakonishok & Lee (2001), Are Insider Trades Informative?, Review of Financial Studies", "Seyhun (1986), Insiders' Profits, Costs of Trading, and Market Efficiency, Journal of Financial Economics"],
+    };
+    M.earnings_reaction = {
+      title: "Earnings reaction",
+      short: "How much the stock beat or lagged the market over the three trading days around its latest earnings release.",
+      now: (ctx) => leadNow("earnings_reaction", ctx,
+        "Uses the date of each company's earnings press release (8-K item 2.02 filings) and the stock's return minus SPY's from the day before to the day after. Only releases from the last 30 days count. The strongest 10% of reactions are flagged; the weakest 10% form the bearish list.",
+        (r, side) => `<b>${esc(r.t)}: ${spct(r.v)} versus the market around its ${esc(r.release || "")} earnings release</b> (${pct(r.p, 0)} percentile${side === "bear" ? ", bearish side" : ""}). The market's verdict on results tends to be more informative than the reported numbers alone, because it reflects guidance and quality.`),
+      use: "A strong reaction flags companies whose results changed investors' minds. Read the release and the call transcript to see why.",
+      origin: P("Chan, Jegadeesh and Lakonishok (1996) found that stocks with large positive returns around earnings announcements kept outperforming over the following months, separately from price momentum. Later work (for example Brandt, Kishore, Santa-Clara and Venkatachalam's 'Earnings announcements are full of surprises') found the announcement return predicts more drift than the accounting surprise."),
+      held: P("Post-earnings drift has weakened in recent large-cap US data as markets react faster, so this indicator needs its own evidence, shown below."),
+      ours: () => evid("earnings_reaction"),
+      refs: ["Chan, Jegadeesh & Lakonishok (1996), Momentum Strategies, Journal of Finance", "Brandt, Kishore, Santa-Clara & Venkatachalam (2008), Earnings Announcements Are Full of Surprises, working paper"],
+    };
+    M.abnormal_volume = {
+      title: "Abnormal volume",
+      short: "How much more the stock has traded over the last five days than over the 50 days before.",
+      now: (ctx) => leadNow("abnormal_volume", ctx,
+        "Volume over the last five trading days divided by average volume over the prior 50. The top 10% are flagged. A volume spike means something drew attention: news, an index change, a large holder trading.",
+        (r) => `<b>${esc(r.t)}: trading at ${H.isNum(r.v) ? Math.exp(r.v).toFixed(1) + "×" : "–"} its normal volume</b> over the last five days, with a ${spct(r.ret_5d)} return over the same days. Find out what happened before reading anything into it.`),
+      use: "A prompt to look for news. On its own it is the weakest kind of lead.",
+      origin: P("Gervais, Kaniel and Mingelgrin (2001) found that stocks with unusually high trading volume over a day or a week tended to rise over the following month, which they attributed to increased visibility attracting new investors. Kaniel, Ozoguz and Starks (2012) found the same pattern across many countries."),
+      held: P("The effect is strongest in smaller, less-followed stocks; in large, heavily traded S&P 500 names it may be weak."),
+      ours: () => evid("abnormal_volume"),
+      refs: ["Gervais, Kaniel & Mingelgrin (2001), The High-Volume Return Premium, Journal of Finance", "Kaniel, Ozoguz & Starks (2012), The High Volume Return Premium: Cross-Country Evidence, Journal of Financial Economics"],
+    };
+    M.leads_overview = mE("Lead indicators", "Five signals that flag individual stocks worth researching, each with its own backtest.",
+      "The page lists today's flagged names for each indicator, the stocks flagged by two or more, and the evidence behind each indicator. Nothing here changes the strategy scores; an indicator would only be considered for the scores after it reaches Validated.",
+      "Start with names flagged by two or more indicators, then read the filings: insider Form 4s, the earnings release, the balance sheet. The flags find candidates; the research decides.",
+      "The indicators come from published research (see each one). The status labels come from this tool's own monthly backtests, split at 2011 where the data allow.");
+    M.lead_status = mE("Status labels", "How much evidence each indicator has in this tool's own backtest.",
+      "<b>Validated</b>: flagged stocks beat the liquid universe with t ≥ 3 over the full period, and did so both before and after 2011. <b>Promising</b>: t ≥ 2 and positive in both periods (or only post-2011 data exists). <b>Unproven</b>: everything else, including indicators that worked in reverse.",
+      "A t of 3 is a deliberately high bar: with many indicators tested, a t of 2 is easy to reach by luck (Harvey, Liu & Zhu 2016). Free data starts in 2004 (prices), 2008 (insider filings), 2009 (earnings releases) and about 2010 (fundamentals), so some indicators have little or no pre-2011 history.",
+      "Out-of-sample testing and higher t-stat thresholds guard against data mining.", ["Harvey, Liu & Zhu (2016), …and the Cross-Section of Expected Returns, Review of Financial Studies"]);
+    M.convergence = mE("Flagged by two or more", "Stocks that appear on at least two bullish lead lists today.",
+      "Independent signals pointing the same way are more informative than any single one, as long as they measure different things (for example insider buying plus a cheap fundamental value).",
+      "The best place to start research.", "Combining weakly correlated signals improves reliability; this is the logic of multi-factor models.");
+
     return M;
   };
 })();

@@ -192,6 +192,23 @@ for speeding up money you were going to invest anyway, not for holding cash.
 - **Factor proxies.** The library proxies are not identical to this screener's definitions. RMW is
   operating profitability, not gross profitability, and insiders have no free long history.
 
+## Lead indicators (Leads page)
+
+Five stock-level signals flag companies worth researching. They do not change the strategy scores.
+
+| Indicator | What it flags | Source study | Free history |
+|---|---|---|---|
+| Insider cluster buying | Two or more insiders buying in the open market within 60 days | Cohen, Malloy & Pomorski (2012) | 2008 on |
+| Fundamental mispricing | Market value far below (or above) the value implied by fundamentals, by sector | Bartram & Grinblatt (2018), scaled by assets | about 2010 on |
+| Residual momentum | 12-1 month return net of market, size and value exposure | Blitz, Huij & Martens (2011) | 2007 on; industries 1963 on |
+| Earnings reaction | Market-adjusted 3-day return around the latest earnings release | Chan, Jegadeesh & Lakonishok (1996) | 2009 on |
+| Abnormal volume | Last week's volume vs the prior 50 days | Gervais, Kaniel & Mingelgrin (2001) | 2004 on |
+
+The weekly job backtests each one (`docs/data/leads_backtest.json`): each month the flagged names' next-month
+return is compared with the liquid universe, split at 2011. Status: **Validated** (t ≥ 3, positive before and
+after 2011), **Promising** (t ≥ 2), or **Unproven**. The nightly job writes today's lists to `docs/data/leads.json`.
+Settings are under `leads:` in `config.yaml`.
+
 ## Version 2 (October 2026)
 
 Each candidate change was tested on its own: added to v1, and toggled in v2. It was adopted only if it
