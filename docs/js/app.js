@@ -321,7 +321,8 @@
     return num(r.v);
   }
   function leadPeriod(x) {
-    if (!x || !isNum(x.ann_mean)) return '<span class="small">no data</span>';
+    if (!x || !x.n) return '<span class="small">no data</span>';
+    if (x.n < 24 || !isNum(x.ann_mean)) return `<span class="small">too short (${x.n} mo)</span>`;
     return `<span class="${cls(x.ann_mean)}">${spct(x.ann_mean)}</span> <span class="small">t ${num(x.t, 1)}</span>`;
   }
   function pageLeads() {

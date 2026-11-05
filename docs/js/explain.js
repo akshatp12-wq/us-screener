@@ -509,7 +509,7 @@
     const evid = (k) => {
       const b = LB()[k];
       if (!b || !b.flagged_minus_universe) return P("The weekly backtest has not produced results for this indicator yet.");
-      const f = b.flagged_minus_universe, n = b.net_of_costs || {}, per = (x) => x && H.isNum(x.ann_mean) ? `${spct(x.ann_mean)} a year (t = ${num(x.t, 1)}, ${x.n} months)` : "no data";
+      const f = b.flagged_minus_universe, n = b.net_of_costs || {}, per = (x) => !x || !x.n ? "no data" : x.n < 24 ? `only ${x.n} months, too short to judge` : `${spct(x.ann_mean)} a year (t = ${num(x.t, 1)}, ${x.n} months)`;
       return P(`<b>Status: ${esc(b.status)}.</b> ${esc(b.reason || "")}.`) +
         P(`Flagged names vs the liquid universe, next month: before 2011 ${per(f.pre)}; 2011 on ${per(f.post)}; full period net of costs ${per(n.full)}. On average ${num(b.avg_flagged, 0)} names were flagged and ${pct(b.avg_new_share, 0)} of them were new each month.`) +
         (b.top30_minus_bottom30 ? P(`Top 30% minus bottom 30% of all liquid stocks: ${per(b.top30_minus_bottom30.full)}. Average rank IC ${num(b.ic_mean, 3)}.`) : "") +
