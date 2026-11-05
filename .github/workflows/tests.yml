@@ -23,4 +23,4 @@ jobs:
       - name: Unit tests and offline end-to-end run (synthetic sources, no network)
         run: python -m pytest -q
       - name: Dashboard JavaScript syntax
-        run: node --check docs/js/app.js
+        run: node --check docs/js/explain.js && node --check docs/js/app.js

@@ -51,6 +51,67 @@
   });
   document.addEventListener("mouseout", (e) => { if (e.target.closest("[data-tip]")) tip.hidden = true; });
 
+  // ------------------------------------------------------------------ explainer panel (two tabs per metric)
+  let XPC = null;
+  const xpContent = () => XPC || (XPC = window.ExplainContent ?
+    window.ExplainContent({ pct, spct, num, esc, isNum, data: () => S.data, mode: () => S.mode }) : {});
+  const ctxAttr = (ctx) => (ctx !== undefined && ctx !== null ? ` data-ctx="${esc(ctx)}"` : "");
+  // label: already-escaped HTML. Renders the label itself as the trigger, with a small "i" mark.
+  const xb = (key, label, ctx, cls = "", icon = true) =>
+    `<button type="button" class="xp ${cls}" data-explain="${esc(key)}"${ctxAttr(ctx)} aria-haspopup="dialog"><span class="xp-l">${label}</span>${icon ? '<span class="xp-i" aria-hidden="true">i</span>' : ""}</button>`;
+  // icon-only trigger, for places where the label already does something else (e.g. sort buttons)
+  const xi = (key, name, ctx) =>
+    `<button type="button" class="xp-icon" data-explain="${esc(key)}"${ctxAttr(ctx)} aria-haspopup="dialog" aria-label="Explain ${esc(name)}" title="What does this mean?">i</button>`;
+  const xk = (key, label, ctx) => (xpContent()[key] ? xb(key, label, ctx) : label);
+  const xpPanel = $("#xp"), xpBackdrop = $("#xp-backdrop");
+  let xpOpener = null;
+  function xpTab(which) {
+    ["now", "bg"].forEach((k) => {
+      const on = k === which, tab = $("#xp-tab-" + k);
+      tab.setAttribute("aria-selected", String(on)); tab.tabIndex = on ? 0 : -1;
+      $("#xp-" + k).hidden = !on;
+    });
+    $("#xp-body").scrollTop = 0;
+  }
+  function openExplain(key, ctx, opener) {
+    const m = xpContent()[key];
+    if (!m || !xpPanel) return;
+    const run = (f) => { try { return f ? f(ctx) || "" : ""; } catch (err) { console.error(err); return `<p class="small">Couldn't read the live value (${esc(err.message)}).</p>`; } };
+    const text = (h) => String(h || "").replace(/<[^>]+>/g, "").trim();
+    xpOpener = opener || null;
+    $("#xp-title").textContent = m.title;
+    $("#xp-short").innerHTML = m.short || "";
+    $("#xp-now").innerHTML = run(m.now) + (m.use ? `<h3>How to use it</h3><p>${m.use}</p>` : "");
+    const ours = run(m.ours);
+    $("#xp-bg").innerHTML = (text(m.origin) ? `<h3>Where it comes from</h3>${m.origin}` : "") +
+      (text(m.held) ? `<h3>Has it held up?</h3>${m.held}` : "") +
+      (text(ours) ? `<h3>In this tool's own tests</h3>${ours}` : "") +
+      ((m.refs || []).length ? `<h3>Sources</h3><ul class="xp-refs">${m.refs.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : "");
+    xpTab("now");
+    xpPanel.hidden = false; xpBackdrop.hidden = false; document.body.classList.add("xp-open");
+    requestAnimationFrame(() => xpPanel.classList.add("in"));
+    $("#xp-close").focus();
+  }
+  function closeExplain() {
+    if (!xpPanel || xpPanel.hidden) return;
+    xpPanel.classList.remove("in"); xpPanel.hidden = true; xpBackdrop.hidden = true; document.body.classList.remove("xp-open");
+    if (xpOpener && document.contains(xpOpener)) xpOpener.focus();
+  }
+  if (xpPanel) {
+    xpPanel.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); closeExplain(); return; }
+      if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && e.target.closest("[role=tab]")) {
+        const next = e.target.id === "xp-tab-now" ? "bg" : "now"; xpTab(next); $("#xp-tab-" + next).focus(); e.preventDefault(); return;
+      }
+      if (e.key === "Tab") {  // keep focus inside the panel while it is open
+        const f = [...xpPanel.querySelectorAll('button, a[href], [tabindex]:not([tabindex="-1"])')].filter((x) => !x.closest("[hidden]"));
+        if (!f.length) return;
+        if (e.shiftKey && document.activeElement === f[0]) { e.preventDefault(); f[f.length - 1].focus(); }
+        else if (!e.shiftKey && document.activeElement === f[f.length - 1]) { e.preventDefault(); f[0].focus(); }
+      }
+    });
+  }
+
   // ------------------------------------------------------------------ data loading
   async function getJSON(name, v) {
     const r = await fetch(DATA + name + ".json?v=" + encodeURIComponent(v || Date.now()), { cache: "no-store" });
@@ -198,14 +259,15 @@
       <p class="small">Market regime as of ${esc(r.asof)}</p>
       <h1 class="hero-word">${esc(g.label)}</h1>
       <div class="hero-band" aria-hidden="true"><i style="left:calc(${pos}% - 2px)"></i></div>
-      <p class="hero-meta">${esc(cap(g.reasons.join("; ")))}. Risk multiplier for absolute-return mode: <b>${num(g.multiplier, 2)}×</b>.
+      <p class="hero-meta">${esc(cap(g.reasons.join("; ")))}. Risk multiplier for absolute-return mode: <b>${num(g.multiplier, 2)}×</b>. ${xb("regime", "What does this label mean?", null, "xp-link")}
       ${g.missing_inputs && g.missing_inputs.length ? `<br><span class="small">Missing inputs: ${esc(g.missing_inputs.join(", "))}.</span>` : ""}</p>
+      <p class="small">Tap any metric name or <span class="xp-i" aria-hidden="true">i</span> mark for what it says now and the research behind it.</p>
       <p class="small">A reading of risk now, not a forecast of when a fall starts: historically the label mostly turned at or after peaks. Fragile = credit warning (gap or red zone) and Stretched. Stretched = euphoric sentiment, ≥20% of sector/industry ETFs bubble-flagged, or a credit warning on its own.</p>
       ${ev && ev.this_week && ev.this_week.length ? `<p><span class="flag">Event this week</span> ${ev.this_week.slice(0, 4).map((e) => esc(e.type + (e.ticker ? " " + e.ticker : "") + " " + e.date.slice(5))).join(", ")}</p>` : ""}
     </section>`;
     const bw = r.dials.buy_watch;
     if (bw && bw.state) {
-      h += `<section class="buywatch" aria-label="Buy watch"><h2>Buy watch: ${esc(bw.state)}${bw.capitulation ? ' <span class="flag">Capitulation</span>' : ""}</h2>
+      h += `<section class="buywatch" aria-label="Buy watch"><h2>${xb("buy_watch", "Buy watch: " + esc(bw.state))}${bw.capitulation ? ' <span class="flag">Capitulation</span>' : ""}</h2>
         <p>${esc(bw.text)}</p>
         <div class="kv"><div><span>Drawdown now</span><b>${spct(bw.drawdown_now)}</b></div><div><span>Worst in 12 months</span><b>${spct(bw.worst_drawdown_lookback)}</b></div>
         <div><span>Above 10-month average</span><b>${bw.above_sma ? "Yes" : "No"}</b></div><div><span>VIX</span><b>${num(bw.vix, 1)}</b></div></div>
@@ -219,8 +281,8 @@
       h += `</ul>`;
     });
     h += `<h2>Market trend</h2><p class="lede small">12-month excess return and price versus the 10-month average. ${info("Moskowitz, Ooi & Pedersen (2012), Time Series Momentum; Faber (2007)")}</p>
-      <div class="table-wrap"><table><thead><tr><th>Asset</th><th>ETF</th><th class="num">12-month</th><th>Above 10-mo avg</th><th>Trend</th></tr></thead><tbody>` +
-      Object.entries(r.trend || {}).map(([k, t]) => `<tr><td>${esc(k)}</td><td>${esc(t.symbol)}</td><td class="num ${cls(t.ret_12m)}">${spct(t.ret_12m)}</td><td>${t.above_10m_sma === undefined ? "–" : t.above_10m_sma ? "Yes" : "No"}</td><td>${st(t.status, t.signal ? t.signal[0].toUpperCase() + t.signal.slice(1) : "Unavailable")}</td></tr>`).join("") +
+      <div class="table-wrap"><table><thead><tr><th>Asset</th><th>ETF</th><th class="num">12-month</th><th>Above 10-mo avg</th><th>Trend ${xi("trend", "market trend")}</th></tr></thead><tbody>` +
+      Object.entries(r.trend || {}).map(([k, t]) => `<tr><td>${xb("trend", esc(k), k)}</td><td>${esc(t.symbol)}</td><td class="num ${cls(t.ret_12m)}">${spct(t.ret_12m)}</td><td>${t.above_10m_sma === undefined ? "–" : t.above_10m_sma ? "Yes" : "No"}</td><td>${st(t.status, t.signal ? t.signal[0].toUpperCase() + t.signal.slice(1) : "Unavailable")}</td></tr>`).join("") +
       `</tbody></table></div>`;
     return h;
   }
@@ -239,7 +301,7 @@
     const p = isNum(d.percentile) ? `<div class="pct" title="Percentile vs history"><i style="left:calc(${(d.percentile * 100).toFixed(1)}% - 1px)"></i></div><span class="pct-label">${pct(d.percentile, 0)} percentile of history</span>` : "";
     return `<li class="dial">
       <span class="glyph ${esc(d.status)}" aria-hidden="true">${{ green: "●", amber: "▲", red: "◆" }[d.status] || "○"}</span>
-      <div><div class="dial-title">${esc(d.title)}</div>${d.info_only ? '<span class="small">Info only</span>' : ""}</div>
+      <div><div class="dial-title">${xk(d.key, esc(d.title))}</div>${d.info_only ? '<span class="small">Info only</span>' : ""}</div>
       <div class="dial-value"><b>${esc(val)}</b>${st(d.status)}</div>
       <div class="dial-sub">${esc(sub)}${esc(d.threshold || "")}<br><span class="small">${esc(d.source)} · ${esc(d.frequency)}${d.as_of ? " · as of " + esc(d.as_of) : ""}</span> ${info(d.cite + " — " + (d.formula || ""))}</div>
       <div class="dial-viz">${sparkSVG(d.sparkline, { label: d.title })}${p}</div>
@@ -251,10 +313,10 @@
     if (!b || !b.rows) return unavailable("Bubble watch");
     const flagged = b.rows.filter((r) => r.status === "amber" || r.status === "red");
     let h = `<h1>Bubble watch</h1><p class="lede">Sector and industry ETFs whose 2-year return beat SPY by ${esc(b.threshold || "")}. Greenwood, Shleifer & You (2019) find such run-ups crash more often, especially with acceleration, rising volatility and issuance. ${info("Greenwood, Shleifer & You (2019), 'Bubbles for Fama', JFE")}</p>
-      <div class="kv"><div><span>ETFs flagged</span><b>${b.n_flagged ?? "–"} of ${b.n_valid ?? "–"}</b></div><div><span>Share flagged</span><b>${pct(b.flagged_share, 0)}</b></div><div><span>Stretched trigger (20%)</span><b>${b.stretched ? "Hit" : "Not hit"}</b></div></div>`;
+      <div class="kv"><div><span>${xb("bubble_watch", "ETFs flagged")}</span><b>${b.n_flagged ?? "–"} of ${b.n_valid ?? "–"}</b></div><div><span>Share flagged</span><b>${pct(b.flagged_share, 0)}</b></div><div><span>Stretched trigger (20%)</span><b>${b.stretched ? "Hit" : "Not hit"}</b></div></div>`;
     if (!flagged.length) h += `<p class="verdict">No sector or industry ETF is in bubble territory right now.</p>`;
-    h += `<div class="table-wrap"><table><thead><tr><th>ETF</th><th>Status</th><th class="num">2-yr return</th><th class="num">vs SPY</th><th class="num">Last 6 mo share</th><th class="num">Vol ratio</th><th>Warnings</th></tr></thead><tbody>` +
-      b.rows.map((r) => `<tr><td><span class="tk">${esc(r.ticker)}</span><span class="nm">${esc(r.name)}</span></td><td>${st(r.status)}</td>
+    h += `<div class="table-wrap"><table><thead><tr><th>ETF</th><th>Status ${xi("bubble_watch", "bubble status")}</th><th class="num">2-yr return ${xi("b_ret2y", "two-year return")}</th><th class="num">vs SPY ${xi("b_excess", "return vs SPY")}</th><th class="num">Last 6 mo share ${xi("b_accel", "last six months' share")}</th><th class="num">Vol ratio ${xi("b_volratio", "volatility ratio")}</th><th>Warnings</th></tr></thead><tbody>` +
+      b.rows.map((r) => `<tr><td>${xb("bubble", `<span class="tk">${esc(r.ticker)}</span>`, r.ticker)}<span class="nm">${esc(r.name)}</span></td><td>${st(r.status)}</td>
         <td class="num ${cls(r.return_2y)}">${spct(r.return_2y, 0)}</td><td class="num ${cls(r.excess_2y)}">${spct(r.excess_2y, 0)}</td>
         <td class="num">${pct(r.accel_share, 0)}</td><td class="num">${num(r.vol_ratio)}</td>
         <td>${(r.warnings || []).map((w) => `<span class="flag">${esc(w)}</span>`).join("") || (r.reason ? `<span class="small">${esc(r.reason)}</span>` : "")}</td></tr>`).join("") + `</tbody></table></div>`;
@@ -280,7 +342,8 @@
     const cols = ["value", "momentum", "profitability", "investment", "issuance", "insiders", "short_interest", "sue", "lowvol"];
     const short = { value: "Val", momentum: "Mom", profitability: "Prof", investment: "Inv", issuance: "Iss", insiders: "Ins", short_interest: "SI", sue: "SUE", lowvol: "LowV" };
     const rows = stockRows();
-    const head = (k, label, numc = true) => `<th class="${numc ? "num" : ""}" aria-sort="${S.sort.key === k ? (S.sort.dir > 0 ? "ascending" : "descending") : "none"}"><button type="button" data-sort="${k}">${esc(label)}${S.sort.key === k ? (S.sort.dir > 0 ? " ▲" : " ▼") : ""}</button></th>`;
+    const LONG = { score: "composite score", value: "value", momentum: "momentum", profitability: "profitability", investment: "investment", issuance: "net share issuance", insiders: "insider buying", short_interest: "short interest", sue: "earnings surprise", lowvol: "low volatility" };
+    const head = (k, label, numc = true) => `<th class="${numc ? "num" : ""}" aria-sort="${S.sort.key === k ? (S.sort.dir > 0 ? "ascending" : "descending") : "none"}"><button type="button" data-sort="${k}">${esc(label)}${S.sort.key === k ? (S.sort.dir > 0 ? " ▲" : " ▼") : ""}</button>${LONG[k] ? " " + xi(k, LONG[k]) : ""}</th>`;
     let h = `<h1>Stock rankings</h1><p class="lede">S&P 1500, scored within GICS sector (percentile, 100% = best in sector). Weights for ${esc(MODES[S.mode])}: ${Object.entries(w).map(([k, v]) => esc(k.replace("_", " ")) + " " + Math.round(v * 100) + "%").join(", ")}.${s.penalty_active ? " Euphoric-sentiment penalty is active for small, young, volatile and unprofitable names." : ""}</p>
       <div class="controls">${modeSeg()}
         <select data-filter="sector" aria-label="Sector"><option value="">All sectors</option>${sectors.map((x) => `<option ${S.filters.sector === x ? "selected" : ""}>${esc(x)}</option>`).join("")}</select>
@@ -298,12 +361,15 @@
         <td>${(r.fl || []).map((x) => `<span class="flag">${esc(x)}</span>`).join("")}</td></tr>`;
       if (S.open.has(r.t)) {
         const x = r.raw || {};
-        h += `<tr class="detail"><td></td><td colspan="${cols.length + 3}"><p><b>Why ranked:</b> ${esc((r.why || {})[S.mode] || "")}</p>
+        const sig = (c) => xb(c, `${esc(LONG[c] ? cap(LONG[c]) : c)} <b>${isNum(r.f[c]) ? Math.round(r.f[c] * 100) + "%" : "–"}</b>`, r.t, "chip", false);
+        const kvx = (k, label, v, c = "") => `<div><span>${xb(k, esc(label), r.t)}</span><b class="${c}">${v}</b></div>`;
+        h += `<tr class="detail"><td></td><td colspan="${cols.length + 3}"><p><b>${xb("score", "Why ranked", r.t)}:</b> ${esc((r.why || {})[S.mode] || "")}</p>
+          <p class="small">Sector percentiles (tap one for what it means for ${esc(r.t)}):</p><div class="chips">${cols.map(sig).join("")}</div>
           <div class="kv"><div><span>Price</span><b>${isNum(r.px) ? "$" + r.px.toFixed(2) : "–"}</b></div><div><span>Market cap</span><b>${money(r.mc)}</b></div><div><span>$ volume / day</span><b>${money(r.dv)}</b></div>
-          <div><span>Book / market</span><b>${num(x.bm)}</b></div><div><span>Earnings yield</span><b>${pct(x.ep)}</b></div><div><span>12–1 momentum</span><b class="${cls(x.mom)}">${spct(x.mom)}</b></div>
-          <div><span>Gross profit / assets</span><b>${pct(x.gpa)}</b></div><div><span>Operating income / assets</span><b>${pct(x.opa)}</b></div><div><span>Asset growth</span><b>${spct(x.ag)}</b></div><div><span>Net issuance</span><b>${spct(x.iss)}</b></div>
-          <div><span>Net opportunistic insiders</span><b>${isNum(x.ins) ? x.ins : "–"}</b></div><div><span>Short interest</span><b>${pct(x.si)}</b></div><div><span>Days to cover</span><b>${num(x.dtc, 1)}</b></div>
-          <div><span>SUE</span><b>${num(x.sue)}</b></div><div><span>Volatility</span><b>${pct(x.vol, 0)}</b></div><div><span>Beta</span><b>${num(x.beta)}</b></div></div>
+          ${kvx("raw_bm", "Book / market", num(x.bm))}${kvx("raw_ep", "Earnings yield", pct(x.ep))}${kvx("raw_mom", "12–1 momentum", spct(x.mom), cls(x.mom))}
+          ${kvx("raw_gpa", "Gross profit / assets", pct(x.gpa))}${kvx("raw_opa", "Operating income / assets", pct(x.opa))}${kvx("raw_ag", "Asset growth", spct(x.ag))}${kvx("raw_iss", "Net issuance", spct(x.iss))}
+          ${kvx("raw_ins", "Net opportunistic insiders", isNum(x.ins) ? x.ins : "–")}${kvx("raw_si", "Short interest", pct(x.si))}${kvx("raw_dtc", "Days to cover", num(x.dtc, 1))}
+          ${kvx("raw_sue", "SUE", num(x.sue))}${kvx("raw_vol", "Volatility", pct(x.vol, 0))}${kvx("raw_beta", "Beta", num(x.beta))}</div>
           <p class="small">Sub-industry: ${esc(r.si || "–")}. Sources: SEC companyfacts (filed dates), Yahoo prices, SEC Form 4, FINRA short interest.</p></td></tr>`;
       }
     });
@@ -318,8 +384,8 @@
     const rows = e.modes[S.mode] || [];
     let h = `<h1>ETF rankings</h1><p class="lede">Momentum and trend with a bubble penalty${S.mode === "absolute_return" ? ", using volatility-adjusted momentum" : ""}; look-through is the holdings-weighted stock score where daily holdings are free (SPDR funds). ${info("Moskowitz & Grinblatt (1999); Moskowitz, Ooi & Pedersen (2012)")}</p>
       <div class="controls">${modeSeg()}</div>
-      <div class="table-wrap"><table><thead><tr><th>#</th><th>ETF</th><th class="num">Score</th><th class="num">12–1 mom</th><th>Trend</th><th class="num">Look-through</th><th>Bubble</th><th class="num">Expense</th><th class="num">$ vol/day</th></tr></thead><tbody>` +
-      rows.map((r, i) => `<tr><td class="num small">${i + 1}</td><td><span class="tk">${esc(r.t)}</span><span class="nm">${esc(r.name)}</span></td>
+      <div class="table-wrap"><table><thead><tr><th>#</th><th>ETF</th><th class="num">Score ${xi("etf", "ETF score")}</th><th class="num">12–1 mom ${xi("etf_mom", "ETF momentum")}</th><th>Trend ${xi("etf_trend", "ETF trend")}</th><th class="num">Look-through ${xi("etf_look", "look-through score")}</th><th>Bubble ${xi("etf_bubble", "bubble flag")}</th><th class="num">Expense ${xi("etf_er", "expense ratio")}</th><th class="num">$ vol/day ${xi("etf_dv", "dollar volume")}</th></tr></thead><tbody>` +
+      rows.map((r, i) => `<tr><td class="num small">${i + 1}</td><td>${xb("etf", `<span class="tk">${esc(r.t)}</span>`, r.t)}<span class="nm">${esc(r.name)}</span></td>
         <td class="num"><b>${isNum(r.score) ? Math.round(r.score * 100) : "–"}</b></td><td class="num ${cls(r.momentum)}">${spct(r.momentum, 0)}</td>
         <td>${st(r.trend === 1 ? "green" : r.trend === 0 ? "red" : "amber", r.trend === 1 ? "Up" : r.trend === 0 ? "Down" : "Mixed")}</td>
         <td class="num">${isNum(r.lookthrough) ? Math.round(r.lookthrough * 100) + ` <span class="small">(${pct(r.lookthrough_coverage, 0)})</span>` : "–"}</td>
@@ -336,20 +402,20 @@
     if (m.status === "unavailable") return h + `<p class="empty">${esc(m.reason)}</p>`;
     if (m.research_only) h += `<p class="verdict">Research only. Market-neutral lost money at the stock level since 2011 (and has been roughly flat at the factor level since 2010), so this portfolio is tracked but not recommended.</p>`;
     const s = m.summary || {}, t = m.turnover || {}, meta = m.meta || {};
-    h += `<div class="kv"><div><span>Holdings</span><b>${s.n ?? "–"}</b></div><div><span>Gross / net exposure</span><b>${pct(s.gross, 0)} / ${pct(s.net, 0)}</b></div>
-      <div><span>Portfolio beta</span><b>${num(s.beta)}</b></div><div><span>Turnover vs last run</span><b>${t.first_build ? "First build" : pct(t.turnover, 0)}</b></div>
-      <div><span>Est. trading cost</span><b>${num(t.cost_bps, 1)} bps</b></div>${isNum(meta.vol_target_exposure) ? `<div><span>Vol-target exposure</span><b>${num(meta.vol_target_exposure)}×</b></div>` : ""}</div>
+    h += `<div class="kv"><div><span>${xb("p_holdings", "Holdings")}</span><b>${s.n ?? "–"}</b></div><div><span>${xb("p_exposure", "Gross / net exposure")}</span><b>${pct(s.gross, 0)} / ${pct(s.net, 0)}</b></div>
+      <div><span>${xb("p_beta", "Portfolio beta")}</span><b>${num(s.beta)}</b></div><div><span>${xb("p_turnover", "Turnover vs last run")}</span><b>${t.first_build ? "First build" : pct(t.turnover, 0)}</b></div>
+      <div><span>${xb("p_cost", "Est. trading cost")}</span><b>${num(t.cost_bps, 1)} bps</b></div>${isNum(meta.vol_target_exposure) ? `<div><span>${xb("p_voltarget", "Vol-target exposure")}</span><b>${num(meta.vol_target_exposure)}×</b></div>` : ""}</div>
       <p class="small">Rules: liquidity floor $5M/day and price > $5, max ${pct(0.05, 0)} per name, 25% sector cap, turnover limited by keeping holdings that still rank inside 1.5× the target count. Regime: ${esc(p.regime && p.regime.label)}.</p>`;
     const sc = m.scenarios || {};
-    h += `<h2>Scenarios (12 months)</h2><p class="lede small">Base rates nudged by the dials: ${esc((p.scenario_probs.notes || []).join("; ") || "no nudges active")}. Each holding is broken into market beta, sector, factor and rate exposures.</p>
+    h += `<h2>${xb("p_scenarios", "Scenarios (12 months)")}</h2><p class="lede small">Base rates nudged by the dials: ${esc((p.scenario_probs.notes || []).join("; ") || "no nudges active")}. Each holding is broken into market beta, sector, factor and rate exposures.</p>
       <div class="table-wrap"><table><thead><tr><th>Scenario</th><th class="num">Probability</th><th class="num">Basket return</th><th>Biggest detractors</th></tr></thead><tbody>` +
       Object.entries(sc.scenarios || {}).map(([k, v]) => `<tr><td>${esc(cap(k.replace("_", " ")))}</td><td class="num">${pct(v.prob, 0)}</td><td class="num ${cls(v.return)}">${spct(v.return)}</td><td class="small">${esc((v.top_detractors || []).join(", "))}</td></tr>`).join("") +
       `<tr><td><b>Probability-weighted</b></td><td></td><td class="num ${cls(sc.expected)}"><b>${spct(sc.expected)}</b></td><td></td></tr></tbody></table></div>`;
-    h += `<h2>Historical stress tests</h2><div class="table-wrap"><table><thead><tr><th>Window</th><th class="num">Replay (today's names)</th><th class="num">Coverage</th><th class="num">Beta estimate</th><th class="num">SPY</th></tr></thead><tbody>` +
+    h += `<h2>${xb("p_stress", "Historical stress tests")}</h2><div class="table-wrap"><table><thead><tr><th>Window</th><th class="num">Replay (today's names)</th><th class="num">Coverage</th><th class="num">Beta estimate</th><th class="num">SPY</th></tr></thead><tbody>` +
       Object.entries(m.stress || {}).map(([k, v]) => `<tr><td>${esc(k)}<span class="nm">${esc((v.window || []).join(" to "))}</span></td><td class="num ${cls(v.replay_return)}">${spct(v.replay_return)}</td><td class="num">${pct(v.coverage, 0)}</td><td class="num ${cls(v.beta_estimate)}">${spct(v.beta_estimate)}</td><td class="num ${cls(v.spy_return)}">${spct(v.spy_return)}</td></tr>`).join("") +
       `</tbody></table></div><p class="small">Replay uses today's holdings that traded in each window, so it flatters (survivors only). The beta estimate is portfolio beta × SPY's move.</p>`;
     const mc = m.monte_carlo || {};
-    h += `<h2>Monte Carlo, 1 year</h2><div class="kv"><div><span>Median</span><b class="${cls(mc.median)}">${spct(mc.median)}</b></div><div><span>5th percentile</span><b class="${cls(mc.p5)}">${spct(mc.p5)}</b></div>
+    h += `<h2>${xb("p_mc", "Monte Carlo, 1 year")}</h2><div class="kv"><div><span>Median</span><b class="${cls(mc.median)}">${spct(mc.median)}</b></div><div><span>5th percentile</span><b class="${cls(mc.p5)}">${spct(mc.p5)}</b></div>
       <div><span>Chance of a 20%+ loss</span><b>${pct(mc.prob_loss_20)}</b></div><div><span>Expected max drawdown</span><b>${spct(mc.expected_max_drawdown)}</b></div></div>${hist(mc.hist)}
       <p class="small">${esc(mc.paths)} paths of daily Student-t (${esc(mc.t_df)} d.f.) returns at ${pct(mc.annual_vol)} annual volatility and a ${spct(mc.annual_mu)} drift from the scenario mix.</p>`;
     const hold = m.holdings || [];
@@ -359,6 +425,10 @@
     return h;
   }
 
+  function statHead() {
+    return [["CAGR", "m_cagr"], ["Vol", "m_vol"], ["Sharpe", "m_sharpe"], ["Max DD", "m_maxdd"], ["Hit rate", "m_hit"]]
+      .map(([l, k]) => `<th class="num">${l} ${xi(k, l)}</th>`).join("");
+  }
   function statRow(name, s, extra = "") {
     if (!s || !isNum(s.cagr)) return `<tr><td>${esc(name)}</td><td colspan="6" class="small">Unavailable</td></tr>`;
     return `<tr><td>${esc(name)}</td><td class="num ${cls(s.cagr)}">${spct(s.cagr)}</td><td class="num">${pct(s.ann_vol)}</td><td class="num">${num(s.sharpe)}</td><td class="num neg">${spct(s.max_dd, 0)}</td><td class="num">${pct(s.hit_rate, 0)}</td>${extra}</tr>`;
@@ -368,7 +438,7 @@
     if (!c || !c.factor || !c.factor.verdicts) return "";
     const g = (x) => isNum(x) ? (x > 0 ? "+" : "") + x.toFixed(2) : "–";
     const V = c.factor.verdicts;
-    let h = `<h2>Version 2 vs version 1</h2><p class="lede small">${esc(c.rule)}</p>
+    let h = `<h2>${xb("m_v2", "Version 2 vs version 1")}</h2><p class="lede small">${esc(c.rule)}</p>
       <div class="table-wrap"><table><thead><tr><th>Change</th><th class="num">Abs. return Sharpe, 1963–2010 (added / kept)</th><th class="num">Long-term Sharpe, 1963–2010</th><th class="num">Abs. return Sharpe, 2011+</th><th>Holds up?</th></tr></thead><tbody>`;
     Object.entries(V).forEach(([k, v]) => {
       const a = v.absolute_return, l = v.long_term;
@@ -404,14 +474,14 @@
     if (md) {
       h += `<h2>${esc(MODES[S.mode])}: factor-level proxy vs market</h2><p class="small">${esc(md.note)}</p>
         ${lineChart([{ name: "Strategy", color: "var(--series-1)", points: curve(md.curve) }, { name: "US market (CRSP; SPY proxy)", color: "var(--bench)", points: curve(md.market_curve) }], { log: true, fmt: (x) => x >= 10 ? x.toFixed(0) : x.toFixed(1), tipFmt: (x) => "$" + num(x, 2), label: "Growth of $1, log scale" })}
-        <div class="table-wrap"><table><thead><tr><th></th><th class="num">CAGR</th><th class="num">Vol</th><th class="num">Sharpe</th><th class="num">Max DD</th><th class="num">Hit rate</th></tr></thead><tbody>
+        <div class="table-wrap"><table><thead><tr><th></th>${statHead()}</tr></thead><tbody>
         ${statRow("Strategy", md.stats)}${statRow("Market", md.market)}${statRow("Strategy minus market", md.excess_vs_market)}</tbody></table></div>
-        <div class="kv"><div><span>CAPM alpha / yr</span><b class="${cls(md.capm && md.capm.alpha_ann)}">${spct(md.capm && md.capm.alpha_ann)}</b></div><div><span>Alpha t-stat</span><b>${num(md.capm && md.capm.alpha_t)}</b></div><div><span>Beta</span><b>${num(md.capm && md.capm.beta)}</b></div>
-        <div><span>Rolling 10-yr windows beating market</span><b>${pct(md.rolling_10y_beat_market, 0)}</b></div><div><span>Since ${esc(md.post_1995_or_pub && md.post_1995_or_pub.since)}: strategy / market CAGR</span><b>${pct(md.post_1995_or_pub && md.post_1995_or_pub.strategy.cagr)} / ${pct(md.post_1995_or_pub && md.post_1995_or_pub.market.cagr)}</b></div></div>`;
+        <div class="kv"><div><span>${xb("m_alpha", "CAPM alpha / yr")}</span><b class="${cls(md.capm && md.capm.alpha_ann)}">${spct(md.capm && md.capm.alpha_ann)}</b></div><div><span>${xb("m_tstat", "Alpha t-stat")}</span><b>${num(md.capm && md.capm.alpha_t)}</b></div><div><span>${xb("m_beta", "Beta")}</span><b>${num(md.capm && md.capm.beta)}</b></div>
+        <div><span>${xb("m_roll10", "Rolling 10-yr windows beating market")}</span><b>${pct(md.rolling_10y_beat_market, 0)}</b></div><div><span>Since ${esc(md.post_1995_or_pub && md.post_1995_or_pub.since)}: strategy / market CAGR</span><b>${pct(md.post_1995_or_pub && md.post_1995_or_pub.strategy.cagr)} / ${pct(md.post_1995_or_pub && md.post_1995_or_pub.market.cagr)}</b></div></div>`;
     }
     h += `<h2>Each signal: before and after publication</h2><p class="lede small">Long/short factor returns, gross; net subtracts estimated trading costs. McLean & Pontiff (2016) find anomaly returns fall about a third after publication. Health compares the last 36 months with the full record.</p>
-      <div class="table-wrap"><table><thead><tr><th>Signal (proxy)</th><th class="num">Sharpe gross</th><th class="num">Sharpe net</th><th class="num">t (NW)</th><th class="num">Pre-pub mean/yr</th><th class="num">Post-pub mean/yr</th><th class="num">Post ÷ pre</th><th>36-mo health</th></tr></thead><tbody>` +
-      Object.entries(f.signals).map(([k, x]) => { const mp = x.mclean_pontiff || {}; return `<tr><td>${esc(k)}<span class="nm">${esc(x.proxy)}</span></td><td class="num">${num(x.long_short_gross.sharpe)}</td><td class="num">${num(x.long_short_net.sharpe)}</td><td class="num">${num(x.t_nw, 1)}</td>
+      <div class="table-wrap"><table><thead><tr><th>Signal (proxy)</th><th class="num">Sharpe gross ${xi("m_sharpe", "Sharpe ratio")}</th><th class="num">Sharpe net</th><th class="num">t (NW) ${xi("m_tstat", "t-statistic")}</th><th class="num">Pre-pub mean/yr</th><th class="num">Post-pub mean/yr</th><th class="num">Post ÷ pre ${xi("m_mp", "post- vs pre-publication")}</th><th>36-mo health ${xi("m_health", "36-month health")}</th></tr></thead><tbody>` +
+      Object.entries(f.signals).map(([k, x]) => { const mp = x.mclean_pontiff || {}; return `<tr><td>${xk(k === "lowbeta" ? "lowvol" : k, esc(k))}<span class="nm">${esc(x.proxy)}</span></td><td class="num">${num(x.long_short_gross.sharpe)}</td><td class="num">${num(x.long_short_net.sharpe)}</td><td class="num">${num(x.t_nw, 1)}</td>
         <td class="num ${cls(mp.pre && mp.pre.ann_mean)}">${spct(mp.pre && mp.pre.ann_mean)}</td><td class="num ${cls(mp.post && mp.post.ann_mean)}">${spct(mp.post && mp.post.ann_mean)}</td><td class="num">${num(mp.post_over_pre)}</td><td>${st(x.health.status, x.health.status === "green" ? "Healthy" : x.health.status === "amber" ? "Fading" : x.health.status === "red" ? "Decayed" : "n/a")} <span class="small">${num(x.health.rolling_sharpe_36m)}</span></td></tr>`; }).join("") +
       `</tbody></table></div>`;
     const cg = f.crash_guard;
@@ -421,16 +491,16 @@
       const x = sb.modes[S.mode];
       h += `<h2>Stock-level backtest (actual screener, ${esc((x.stats || {}).start || "")} on)</h2>
         ${lineChart([{ name: "Screener", color: "var(--series-1)", points: curve(x.curve) }, { name: "SPY", color: "var(--bench)", points: curve(x.spy_curve) }, { name: "Universe, equal-weighted", color: "var(--series-2)", points: curve(x.universe_curve), dash: true }], { log: true, tipFmt: (y) => "$" + num(y, 2), label: "Growth of $1" })}
-        <div class="table-wrap"><table><thead><tr><th></th><th class="num">CAGR</th><th class="num">Vol</th><th class="num">Sharpe</th><th class="num">Max DD</th><th class="num">Hit rate</th></tr></thead><tbody>
+        <div class="table-wrap"><table><thead><tr><th></th>${statHead()}</tr></thead><tbody>
         ${statRow("Screener (net of costs)", x.stats)}${statRow("SPY", x.spy)}${statRow("Screener minus universe", x.excess_vs_universe_ew)}</tbody></table></div>
         <p class="small">Average monthly turnover ${pct(x.avg_turnover, 0)}. ${esc((sb.notes || []).join(" "))}</p>`;
-      if (sb.universe && sb.universe.survivorship_gap) h += `<p class="verdict">Survivorship check: today's universe, equal-weighted, returned ${spct(sb.universe.equal_weight.cagr)} a year vs ${spct(sb.universe.rsp && sb.universe.rsp.cagr)} for RSP. The gap (${spct(sb.universe.survivorship_gap.cagr)}/yr) is roughly how much the backtest universe is flattered; judge the screener by its spread over the universe.</p>`;
-      h += `<details><summary>Stock-level signal spreads</summary><div class="table-wrap"><table><thead><tr><th>Signal</th><th class="num">Top 30% − bottom 30% / yr</th><th class="num">t (NW)</th><th class="num">Mean rank IC</th></tr></thead><tbody>` +
-        Object.entries(sb.signals || {}).map(([k, y]) => y.top30_minus_bottom30 ? `<tr><td>${esc(k)}</td><td class="num ${cls(y.top30_minus_bottom30.ann_mean)}">${spct(y.top30_minus_bottom30.ann_mean)}</td><td class="num">${num(y.t_nw, 1)}</td><td class="num">${num(y.ic_mean, 3)}</td></tr>` : `<tr><td>${esc(k)}</td><td colspan="3" class="small">${esc(y.reason || "unavailable")}</td></tr>`).join("") + `</tbody></table></div></details>`;
+      if (sb.universe && sb.universe.survivorship_gap) h += `<p class="verdict">${xb("m_survivorship", "Survivorship check")}: today's universe, equal-weighted, returned ${spct(sb.universe.equal_weight.cagr)} a year vs ${spct(sb.universe.rsp && sb.universe.rsp.cagr)} for RSP. The gap (${spct(sb.universe.survivorship_gap.cagr)}/yr) is roughly how much the backtest universe is flattered; judge the screener by its spread over the universe.</p>`;
+      h += `<details><summary>Stock-level signal spreads</summary><div class="table-wrap"><table><thead><tr><th>Signal</th><th class="num">Top 30% − bottom 30% / yr</th><th class="num">t (NW) ${xi("m_tstat", "t-statistic")}</th><th class="num">Mean rank IC ${xi("m_ic", "rank IC")}</th></tr></thead><tbody>` +
+        Object.entries(sb.signals || {}).map(([k, y]) => y.top30_minus_bottom30 ? `<tr><td>${xk(k, esc(k))}</td><td class="num ${cls(y.top30_minus_bottom30.ann_mean)}">${spct(y.top30_minus_bottom30.ann_mean)}</td><td class="num">${num(y.t_nw, 1)}</td><td class="num">${num(y.ic_mean, 3)}</td></tr>` : `<tr><td>${esc(k)}</td><td colspan="3" class="small">${esc(y.reason || "unavailable")}</td></tr>`).join("") + `</tbody></table></div></details>`;
     }
 
     if (v) h += validationSection(v, b);
-    h += `<h2>Live track record</h2>`;
+    h += `<h2>${xb("m_track", "Live track record")}</h2>`;
     if (tr && tr.by_mode) {
       h += `<div class="table-wrap"><table><thead><tr><th>Mode</th><th class="num">Snapshots</th><th class="num">Mean excess vs SPY</th><th class="num">Hit rate</th><th class="num">Mature (21d+)</th></tr></thead><tbody>` +
         Object.entries(tr.by_mode).map(([k, y]) => `<tr><td>${esc(MODES[k] || k)}</td><td class="num">${y.snapshots}</td><td class="num ${cls(y.mean_excess)}">${spct(y.mean_excess)}</td><td class="num">${pct(y.hit_rate, 0)}</td><td class="num">${y.mature_snapshots}</td></tr>`).join("") + `</tbody></table></div>`;
@@ -441,17 +511,17 @@
   function validationSection(v, b) {
     let h = `<h2>Do the market dials work?</h2>`;
     const r = v.regime && v.regime.by_label;
-    if (r) h += `<h3>Regime label, forward 12 months (since ${esc(b.regime_history && b.regime_history.since)})</h3><div class="table-wrap"><table><thead><tr><th>Label</th><th class="num">Months</th><th class="num">Mean return</th><th class="num">Volatility</th><th class="num">P(20% drawdown)</th></tr></thead><tbody>` +
+    if (r) h += `<h3>${xb("regime", "Regime label")}, forward 12 months (since ${esc(b.regime_history && b.regime_history.since)})</h3><div class="table-wrap"><table><thead><tr><th>Label</th><th class="num">Months</th><th class="num">Mean return</th><th class="num">Volatility</th><th class="num">P(20% drawdown)</th></tr></thead><tbody>` +
       ["Calm", "Stretched", "Fragile"].map((k) => r[k] ? `<tr><td>${esc(k)}</td><td class="num">${r[k].months}</td><td class="num ${cls(r[k].fwd12_mean)}">${spct(r[k].fwd12_mean)}</td><td class="num">${pct(r[k].fwd_vol)}</td><td class="num">${pct(r[k].prob_dd20, 0)}</td></tr>` : "").join("") +
       `<tr><td>All months</td><td class="num">${v.regime.all.months}</td><td class="num">${spct(v.regime.all.fwd12_mean)}</td><td class="num">${pct(v.regime.all.fwd_vol)}</td><td class="num">${pct(v.regime.all.prob_dd20, 0)}</td></tr></tbody></table></div>`;
     const yc = v.yield_curve || {};
     h += `<h3>Other dials</h3><div class="table-wrap"><table><thead><tr><th>Dial</th><th>Test</th><th class="num">Result</th></tr></thead><tbody>
-      <tr><td>Yield curve</td><td>AUC, recession starts within 12 months (0.5 = coin flip)</td><td class="num">${num(yc.auc_recession_starts_within_12m)} <span class="small">(post-1996: ${num(yc.auc_post_publication)})</span></td></tr>
-      <tr><td>Excess bond premium</td><td>AUC, recession starts within 12 months</td><td class="num">${num(v.ebp && v.ebp.auc_recession_starts_within_12m)}</td></tr>
-      <tr><td>CAPE</td><td>Out-of-sample R², 10-year real return vs historical mean</td><td class="num">${num(v.cape && v.cape.oos_r2_vs_hist_mean)}</td></tr>
-      <tr><td>Variance risk premium</td><td>Next-quarter return, lowest → highest VRP quintile</td><td class="num">${((v.vrp && v.vrp.fwd_3m_by_vrp_quintile) || []).map((x) => spct(x, 1)).join(" / ") || "–"}</td></tr>
-      <tr><td>Bubble watch</td><td>P(40% crash in 2 yrs) after a 100% run-up vs base rate</td><td class="num">${pct(v.bubbles && v.bubbles.crash_prob_after_100pct, 0)} vs ${pct(v.bubbles && v.bubbles.base_crash_prob, 0)} <span class="small">(${v.bubbles && v.bubbles.n_events} events)</span></td></tr>
-      <tr><td>Trend (stocks)</td><td>Sharpe, trend rule vs buy-and-hold</td><td class="num">${num(v.trend && v.trend.stocks && v.trend.stocks.trend.sharpe)} vs ${num(v.trend && v.trend.stocks && v.trend.stocks.buy_hold.sharpe)}</td></tr>
+      <tr><td>${xb("yield_curve", "Yield curve")}</td><td>AUC, recession starts within 12 months (0.5 = coin flip) ${xi("m_auc", "AUC")}</td><td class="num">${num(yc.auc_recession_starts_within_12m)} <span class="small">(post-1996: ${num(yc.auc_post_publication)})</span></td></tr>
+      <tr><td>${xb("ebp", "Excess bond premium")}</td><td>AUC, recession starts within 12 months ${xi("m_auc", "AUC")}</td><td class="num">${num(v.ebp && v.ebp.auc_recession_starts_within_12m)}</td></tr>
+      <tr><td>${xb("cape", "CAPE")}</td><td>Out-of-sample R², 10-year real return vs historical mean ${xi("m_oosr2", "out-of-sample R²")}</td><td class="num">${num(v.cape && v.cape.oos_r2_vs_hist_mean)}</td></tr>
+      <tr><td>${xb("vrp", "Variance risk premium")}</td><td>Next-quarter return, lowest → highest VRP quintile</td><td class="num">${((v.vrp && v.vrp.fwd_3m_by_vrp_quintile) || []).map((x) => spct(x, 1)).join(" / ") || "–"}</td></tr>
+      <tr><td>${xb("bubble_watch", "Bubble watch")}</td><td>P(40% crash in 2 yrs) after a 100% run-up vs base rate</td><td class="num">${pct(v.bubbles && v.bubbles.crash_prob_after_100pct, 0)} vs ${pct(v.bubbles && v.bubbles.base_crash_prob, 0)} <span class="small">(${v.bubbles && v.bubbles.n_events} events)</span></td></tr>
+      <tr><td>${xb("trend", "Trend (stocks)", "stocks")}</td><td>Sharpe, trend rule vs buy-and-hold</td><td class="num">${num(v.trend && v.trend.stocks && v.trend.stocks.trend.sharpe)} vs ${num(v.trend && v.trend.stocks && v.trend.stocks.buy_hold.sharpe)}</td></tr>
       </tbody></table></div>`;
     if (yc.episodes_above_red && yc.episodes_above_red.length) h += `<details><summary>Yield-curve red episodes</summary><p class="small">${yc.episodes_above_red.map((e) => esc(e.signal_start + " → " + e.signal_end + (e.recession_within_24m === null ? "" : e.recession_within_24m ? " (recession followed)" : " (no recession)"))).join("<br>")}</p></details>`;
     const c = v.credit || {};
@@ -469,21 +539,21 @@
       eps.map((e) => `<tr><td style="white-space:nowrap"><b>${esc(e.peak)}</b><span class="nm">to ${esc(e.trough)}</span></td><td class="num neg">${spct(e.depth, 0)}</td><td class="num">${e.months_down} / ${e.months_to_recover ?? "–"}</td>
         ${Object.keys(short).map((m) => { const x = (e.performance[m] || {}).peak_to_trough; return `<td class="num ${cls(x)}">${spct(x, 0)}</td>`; }).join("")}
         <td class="small">${esc((e.dials_12m_before || {}).label || "–")} → ${esc((e.dials_at_peak || {}).label || "–")}</td></tr>`).join("") + `</tbody></table></div>`;
-    h += `<h2>Did the dials warn ahead of the peak?</h2><p class="small">Months before each peak that a warning first fired (within the prior 24 months). Blank = no warning.</p>`;
+    h += `<h2>${xb("c_warning", "Did the dials warn ahead of the peak?")}</h2><p class="small">Months before each peak that a warning first fired (within the prior 24 months). Blank = no warning.</p>`;
     const wnames = Object.keys((eps[0] || {}).warning_lead_months || {});
     h += `<div class="table-wrap"><table><thead><tr><th>Warning</th>${eps.map((e) => `<th class="num">${esc(e.peak.slice(0, 4))}</th>`).join("")}<th class="num">Followed by a bear within 24 mo</th></tr></thead><tbody>` +
       wnames.map((w) => { const fa = (c.replay.false_alarms || {})[w] || {}; return `<tr><td>${esc(w)}</td>${eps.map((e) => { const v = e.warning_lead_months[w]; return `<td class="num">${v === null || v === undefined ? "" : v}</td>`; }).join("")}<td class="num">${pct(fa.followed_by_bear_within_24m, 0)} <span class="small">(on ${pct(fa.share_on, 0)} of months)</span></td></tr>`; }).join("") + `</tbody></table></div><p class="small">Followed-by-a-bear rate vs ${pct((c.replay.false_alarms || {})._base_rate, 0)} for any random month. ${esc(c.replay.note)}</p>`;
     const te = c.replay.trend_exits || [];
-    if (te.length) h += `<h3>Trend rule as an exit and re-entry signal</h3><div class="table-wrap"><table><thead><tr><th>Peak</th><th class="num">Sold, months after peak</th><th class="num">Already down</th><th class="num">Bought back, months after low</th><th class="num">Above the low</th><th class="num">Loss avoided vs holding</th></tr></thead><tbody>` +
+    if (te.length) h += `<h3>${xb("trend", "Trend rule as an exit and re-entry signal", "stocks")}</h3><div class="table-wrap"><table><thead><tr><th>Peak</th><th class="num">Sold, months after peak</th><th class="num">Already down</th><th class="num">Bought back, months after low</th><th class="num">Above the low</th><th class="num">Loss avoided vs holding</th></tr></thead><tbody>` +
       te.map((t) => `<tr><td>${esc(t.peak)}</td><td class="num">${t.exit_months_after_peak ?? "–"}</td><td class="num">${spct(t.drawdown_at_exit, 0)}</td><td class="num">${t.reentry_months_after_trough ?? "–"}</td><td class="num">${spct(t.above_trough_at_reentry, 0)}</td><td class="num ${cls(t.loss_avoided_vs_hold)}">${spct(t.loss_avoided_vs_hold, 0)}</td></tr>`).join("") + `</tbody></table></div>`;
     if (bt.rules) {
       const ch = bt.chosen_out_of_sample || {};
-      h += `<h2>When to buy</h2><p class="verdict">Best rule chosen on 1960–1999: <b>${esc(bt.chosen_in_sample || "–")}</b>. Out of sample (2000 on) it fired ${ch.n ?? "–"} times; average next-24-month excess return ${spct(ch.fwd24_mean)} vs ${spct(ch.uncond_fwd24)} for any month; median ${esc(ch.months_from_trough_median ?? "–")} months from the bottom.</p>`;
-      h += `<div class="table-wrap"><table><thead><tr><th>Rule</th><th class="num">1960–99 signals</th><th class="num">1960–99 edge, 24 mo</th><th class="num">2000+ signals</th><th class="num">2000+ edge, 12 mo</th><th class="num">2000+ edge, 24 mo</th><th class="num">2000+ hit rate</th><th class="num">Months from bottom</th></tr></thead><tbody>` +
+      h += `<h2>${xb("buy_watch", "When to buy")}</h2><p class="verdict">Best rule chosen on 1960–1999: <b>${esc(bt.chosen_in_sample || "–")}</b>. Out of sample (2000 on) it fired ${ch.n ?? "–"} times; average next-24-month excess return ${spct(ch.fwd24_mean)} vs ${spct(ch.uncond_fwd24)} for any month; median ${esc(ch.months_from_trough_median ?? "–")} months from the bottom.</p>`;
+      h += `<div class="table-wrap"><table><thead><tr><th>Rule</th><th class="num">1960–99 signals</th><th class="num">1960–99 edge, 24 mo ${xi("c_edge", "buy-rule edge")}</th><th class="num">2000+ signals</th><th class="num">2000+ edge, 12 mo</th><th class="num">2000+ edge, 24 mo</th><th class="num">2000+ hit rate</th><th class="num">Months from bottom</th></tr></thead><tbody>` +
         bt.rules.map((r) => { const a = r.in_sample || {}, o = r.out_of_sample || {}; return `<tr><td>${esc(r.rule)}${r.rule === bt.chosen_in_sample ? ' <span class="flag">chosen 1960–99</span>' : ""}${r.consistent ? ' <span class="flag">worked in both periods</span>' : ""}</td><td class="num">${a.n ?? 0}</td><td class="num ${cls(a.edge24)}">${spct(a.edge24)}</td><td class="num">${o.n ?? 0}</td><td class="num ${cls(o.edge12)}">${spct(o.edge12)}</td><td class="num ${cls(o.edge24)}">${spct(o.edge24)}</td><td class="num">${pct(o.fwd12_hit, 0)}</td><td class="num">${o.months_from_trough_median ?? "–"}</td></tr>`; }).join("") + `</tbody></table></div><p class="small">Edge = average excess return after a signal minus the average over all months in the same period. Signals are de-duplicated to one per 12 months. Negative "months from bottom" = bought before the low.</p>`;
       const cp = (bt.composite || {}).periods || {};
       if (cp["2000-2026"]) {
-        h += `<h3>Composite buy score (drawdown, credit spreads, fear, cheapness; no fitting)</h3>
+        h += `<h3>${xb("c_composite", "Composite buy score")} (drawdown, credit spreads, fear, cheapness; no fitting)</h3>
           <div class="table-wrap"><table><thead><tr><th>Period</th>${[1, 2, 3, 4, 5].map((q) => `<th class="num">Q${q}</th>`).join("")}<th class="num">Rank corr.</th></tr></thead><tbody>` +
           Object.entries(cp).map(([k, v]) => `<tr><td>${esc(k)} next 12 mo</td>${v.quintile_fwd12.map((x) => `<td class="num ${cls(x)}">${spct(x)}</td>`).join("")}<td class="num">${num(v.corr_fwd12)}</td></tr>`).join("") +
           `</tbody></table></div><p class="small">Q5 = strongest buy signal. Latest score: ${num(bt.composite.latest && bt.composite.latest.score)} (${pct(bt.composite.latest && bt.composite.latest.percentile, 0)} percentile, ${esc(bt.composite.latest && bt.composite.latest.date)}).</p>`;
@@ -491,7 +561,7 @@
       const deps = bt.deployments || (bt.deployment ? [bt.deployment] : []);
       if (deps.length) {
         const full = (deps[0].periods || {})["1960-2026"] || {};
-        h += `<h3>Holding a 20% cash reserve for dips vs staying invested (1960–2026)</h3><div class="table-wrap"><table><thead><tr><th>Strategy</th><th class="num">CAGR</th><th class="num">Max drawdown</th><th class="num">2000+ CAGR</th></tr></thead><tbody>` +
+        h += `<h3>${xb("c_reserve", "Holding a 20% cash reserve for dips vs staying invested (1960–2026)")}</h3><div class="table-wrap"><table><thead><tr><th>Strategy</th><th class="num">CAGR</th><th class="num">Max drawdown</th><th class="num">2000+ CAGR</th></tr></thead><tbody>` +
           deps.map((d) => { const v = d.periods["1960-2026"].buy_the_dip, o = d.periods["2000-2026"].buy_the_dip; return `<tr><td>Reserve deployed on: ${esc(d.rule)}</td><td class="num">${pct(v.cagr, 2)}</td><td class="num">${spct(v.max_dd, 0)}</td><td class="num">${pct(o.cagr, 2)}</td></tr>`; }).join("") +
           `<tr><td>Static 80% stocks / 20% T-bills</td><td class="num">${pct(full.static_80_20 && full.static_80_20.cagr, 2)}</td><td class="num">${spct(full.static_80_20 && full.static_80_20.max_dd, 0)}</td><td class="num">${pct(deps[0].periods["2000-2026"].static_80_20.cagr, 2)}</td></tr>
           <tr><td><b>100% stocks</b></td><td class="num"><b>${pct(full.fully_invested && full.fully_invested.cagr, 2)}</b></td><td class="num">${spct(full.fully_invested && full.fully_invested.max_dd, 0)}</td><td class="num">${pct(deps[0].periods["2000-2026"].fully_invested.cagr, 2)}</td></tr></tbody></table></div><p class="small">The reserve is deployed when the rule fires and rebuilt at the next market high. Every variant beats holding static cash but trails staying fully invested.</p>`;
@@ -514,7 +584,7 @@
       <li>Free data only. Stock-level history uses today's S&P 1500, so it carries survivorship bias; the factor-level tests do not.</li>
       <li>Fundamentals come from XBRL (2009 on) and use the first filed value; some firms tag concepts inconsistently, so coverage is below 100%.</li>
       <li>Short interest history for listed stocks is only free from mid-2021; it is used live, not in the long backtest.</li>
-      <li>SUE uses the 10-Q/10-K filing date, which is later than the earnings release, so it understates the drift.</li>
+      <li>SUE is dated to the earnings press release (8-K item 2.02) where one is found, otherwise to the 10-Q/10-K filing date.</li>
       <li>Baker-Wurgler sentiment is built on the full sample and ends years ago; the live proxy replaces it.</li>
       <li>Scenario shocks are calibrated assumptions in config.yaml, not forecasts.</li></ul>`;
   }
@@ -550,6 +620,11 @@
   }
   window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
   document.addEventListener("click", (e) => {
+    const xe = e.target.closest("[data-explain]");
+    if (xe) { e.preventDefault(); openExplain(xe.dataset.explain, xe.dataset.ctx, xe); return; }
+    if (e.target.closest("#xp-close") || e.target === xpBackdrop) { closeExplain(); return; }
+    const xt = e.target.closest("[data-xptab]"); if (xt) { xpTab(xt.dataset.xptab); return; }
+    if (e.target.closest("#xp")) return;
     const mb = e.target.closest("[data-mode]"); if (mb) { S.mode = mb.dataset.mode; render(); return; }
     const sb = e.target.closest("[data-sort]"); if (sb) { const k = sb.dataset.sort; S.sort = { key: k, dir: S.sort.key === k ? -S.sort.dir : (k === "t" ? 1 : -1) }; render(); return; }
     if (e.target.closest("[data-more]")) { S.stockLimit += 100; render(); return; }

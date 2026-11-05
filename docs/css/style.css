@@ -59,6 +59,7 @@
 }
 
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html { -webkit-text-size-adjust: 100%; }
 body {
   margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font);
@@ -213,3 +214,50 @@ summary { cursor: pointer; font-weight: 650; color: var(--ink-2); font-size: 14p
 }
 .buywatch { border: 1px solid var(--rule); border-radius: 10px; padding: 4px 14px 8px; margin: 18px 0; background: var(--surface); }
 .buywatch h2 { margin-top: 10px; }
+
+/* ---------------------------------------------------------------- explainer triggers + panel */
+.xp, .xp-icon { all: unset; cursor: pointer; }
+.xp { display: inline-flex; align-items: center; gap: 6px; border-radius: 4px; max-width: 100%; }
+.xp .xp-l { text-decoration: none; }
+.xp:hover .xp-l { text-decoration: underline; text-underline-offset: 3px; }
+.xp-i, .xp-icon { display: inline-grid; place-items: center; flex: none; width: 15px; height: 15px; border-radius: 50%;
+  border: 1px solid var(--muted); color: var(--muted); font: italic 700 10px/1 Georgia, "Times New Roman", serif;
+  box-sizing: border-box; vertical-align: middle; }
+.xp:hover .xp-i, .xp-icon:hover { background: var(--ink); border-color: var(--ink); color: var(--surface); }
+.xp:focus-visible, .xp-icon:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.xp-icon { margin-left: 3px; }
+.xp-link .xp-l { color: var(--series-1); text-decoration: underline; text-underline-offset: 3px; }
+.kv span .xp { font-size: 12.5px; color: var(--muted); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 10px; }
+.xp.chip { border: 1px solid var(--rule); border-radius: 999px; padding: 3px 10px; font-size: 13px; background: var(--surface); color: var(--ink-2); }
+.xp.chip b { color: var(--ink); margin-left: 4px; }
+.xp.chip:hover { border-color: var(--ink); }
+.xp-backdrop { position: fixed; inset: 0; z-index: 70; background: rgba(10, 16, 24, 0.38); }
+.xp-panel { position: fixed; z-index: 71; top: 0; right: 0; bottom: 0; width: min(480px, 100vw); display: flex; flex-direction: column;
+  background: var(--surface); color: var(--ink); border-left: 1px solid var(--rule); box-shadow: -14px 0 40px rgba(10, 20, 30, 0.2);
+  opacity: 0; transform: translateX(18px); }
+.xp-panel.in { opacity: 1; transform: none; }
+@media (max-width: 719px) {
+  .xp-panel { top: auto; left: 0; width: 100%; max-height: 86vh; border-left: 0; border-top: 1px solid var(--rule);
+    border-radius: 14px 14px 0 0; transform: translateY(18px); padding-bottom: env(safe-area-inset-bottom); }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .xp-panel { transition: opacity 0.18s ease-out, transform 0.18s ease-out; }
+}
+.xp-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding: 16px 18px 4px; }
+.xp-head h2 { margin: 0; font-size: 19px; font-variation-settings: "wdth" 106; }
+.xp-short { margin: 0; padding: 2px 18px 10px; color: var(--ink-2); font-size: 14px; }
+.xp-tabs { display: flex; gap: 4px; padding: 0 18px; border-bottom: 1px solid var(--rule); }
+.xp-tabs button { all: unset; cursor: pointer; padding: 8px 8px 9px; font-size: 14px; font-weight: 600; color: var(--ink-2);
+  border-bottom: 3px solid transparent; }
+.xp-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); }
+.xp-tabs button:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.xp-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding: 6px 18px 28px; font-size: 14.5px; }
+.xp-body [role="tabpanel"]:focus-visible { outline: none; }
+.xp-body h3 { font-size: 12.5px; font-weight: 700; color: var(--muted); letter-spacing: 0.03em; text-transform: uppercase; margin: 18px 0 4px; }
+.xp-body p { margin: 6px 0; }
+.xp-refs { margin: 4px 0; padding-left: 18px; font-size: 13px; color: var(--ink-2); }
+.xp-refs li { margin: 3px 0; }
+body.xp-open { overflow: hidden; }
+.kv .xp-i { display: inline-grid; font-size: 10px; color: var(--muted); }
+.kv .xp-l { display: inline; font-size: inherit; color: inherit; }

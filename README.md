@@ -5,6 +5,11 @@ live dashboard on GitHub Pages.
 
 **Dashboard:** https://akshatp12-wq.github.io/us-screener/
 
+Every metric on the dashboard can be tapped. A panel opens with two tabs: **What it says now** reads
+the live value in plain English, and **Background & evidence** covers the research behind the metric,
+whether it held up after publication, and this tool's own test results. The text lives in
+`docs/js/explain.js`.
+
 > **Not investment advice.** This is a research tool. Backtests are hypothetical, ignore taxes, and are
 > subject to the data limitations listed below. Past results do not predict future returns.
 
