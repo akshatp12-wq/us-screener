@@ -31,7 +31,7 @@ jobs:
     timeout-minutes: 170
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: ${{ steps.deployment.outputs.page_url || steps.deployment_retry.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -112,10 +112,30 @@ jobs:
         with:
           path: docs
 
+      # Pages publishing occasionally stalls on GitHub's side ("Timeout reached, aborting!"). Allow
+      # 20 minutes, retry once, and fail the run only if both attempts fail. The data commit above has
+      # already landed either way, and the next run redeploys.
       - name: Deploy dashboard
         id: deployment
         if: steps.market.outputs.skip != 'true'
+        continue-on-error: true
         uses: actions/deploy-pages@v4
+        with:
+          timeout: 1200000
+
+      - name: Retry dashboard deploy
+        id: deployment_retry
+        if: steps.market.outputs.skip != 'true' && steps.deployment.outcome == 'failure'
+        continue-on-error: true
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 1200000
+
+      - name: Fail if the dashboard could not be deployed
+        if: steps.deployment.outcome == 'failure' && steps.deployment_retry.outcome != 'success'
+        run: |
+          echo "::error::GitHub Pages deploy failed twice. Data was committed; the next run will redeploy."
+          exit 1
 
       - name: Fail if a pipeline stage failed
         if: steps.pipe.outcome == 'failure'
