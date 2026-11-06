@@ -205,6 +205,15 @@ Five stock-level signals and one sector-ETF signal flag names worth researching.
 | Abnormal volume | Last week's volume vs the prior 50 days | Gervais, Kaniel & Mingelgrin (2001) | 2004 on |
 | Sector ETF residual momentum | Top sector and industry ETFs by residual momentum (separate ETF list) | Blitz, Huij & Martens (2011); Moskowitz & Grinblatt (1999) | 49 industries 1963 on; ETFs 2007 on |
 
+Each flagged name shows its **signal date** (when the current flag started), the closing price that day,
+and the return since, next to SPY's. Earnings reactions are dated to the day the 3-day reaction window
+closes; insider buying to the filing that turned net buying positive; abnormal volume to the first day of
+the spike; mispricing and residual momentum to the first month end of the current run. Every flag is
+logged from the day it starts in `docs/data/leads_state.json`, which builds a live record per indicator.
+
+The dashboard's ↻ button reloads the latest published data. "Recompute ↗" opens the pipeline on GitHub,
+where **Run workflow** recalculates everything (about 5–20 minutes; the page picks it up automatically).
+
 The "flagged by two or more" list counts only indicators whose flagged names beat the universe before costs
 over their full backtest. A first version used "two or more insiders buying within 60 days"; it showed no edge
 and was replaced by the opportunistic-insider rule above.

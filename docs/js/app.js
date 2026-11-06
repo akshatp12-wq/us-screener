@@ -142,13 +142,36 @@
     if (s < 172800) return Math.round(s / 3600) + " h ago";
     return Math.round(s / 86400) + " days ago";
   }
+  // GitHub page where the pipeline can be run by hand (derived from the Pages address)
+  const REPO = (() => {
+    const h = location.hostname.match(/^([^.]+)\.github\.io$/), p = location.pathname.split("/").filter(Boolean)[0];
+    return h && p ? `https://github.com/${h[1]}/${p}` : "https://github.com/akshatp12-wq/us-screener";
+  })();
   function setUpdated(m, err) {
     const el = $("#updated-label");
     if (!m) { el.innerHTML = `<span class="stale">Data unavailable</span> ${esc(err || "")}`; return; }
     const t = new Date(m.run_time);
     const stale = (Date.now() - t.getTime()) > 36 * 3600 * 1000;
     el.innerHTML = `Updated <strong class="${stale ? "stale" : ""}" title="${esc(t.toString())}">${esc(ago(m.run_time))}</strong>` +
-      `<br><span class="small">${esc(t.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }))} · ${esc(m.job)}</span>`;
+      `<br><span class="small">${esc(t.toLocaleString([], { dateStyle: "medium", timeStyle: "short" }))} · ${esc(m.job)} · ` +
+      `<a href="${REPO}/actions/workflows/pipeline.yml" target="_blank" rel="noopener" title="Open GitHub to run the pipeline now (Run workflow). Takes about 5 to 20 minutes; this page picks up the result automatically.">Recompute ↗</a></span>`;
+  }
+  async function manualRefresh() {
+    const b = $("#refresh-btn");
+    if (!b || b.disabled) return;
+    b.disabled = true; b.classList.add("spinning");
+    const before = S.manifest && S.manifest.run_time;
+    try { await refresh(true); } finally {
+      b.disabled = false; b.classList.remove("spinning");
+      const now = S.manifest && S.manifest.run_time;
+      b.title = now && now !== before ? "Loaded newer data" : "Already showing the latest published data";
+      announce(b.title);
+    }
+  }
+  function announce(msg) {
+    let live = $("#sr-live");
+    if (!live) { live = document.createElement("div"); live.id = "sr-live"; live.className = "sr-only"; live.setAttribute("aria-live", "polite"); document.body.appendChild(live); }
+    live.textContent = msg;
   }
   setInterval(() => { refresh(false); }, POLL_MS);
   setInterval(() => { if (S.manifest) setUpdated(S.manifest); }, 60000);
@@ -313,7 +336,7 @@
   const leadStatus = (s) => st(s === "Validated" ? "green" : s === "Promising" ? "amber" : "unavailable", s || "Not yet tested");
   function leadValue(k, r) {
     if (!r) return "–";
-    if (k === "mispricing") return `${spct(r.v, 0)} <span class="small">fair value vs price</span>`;
+    if (k === "mispricing") return isNum(r.v) && r.v > 3 ? `>+300% <span class="small" title="A gap this large usually means a data problem (share count, a one-off item). Check the filings.">check data</span>` : `${spct(r.v, 0)} <span class="small">fair value vs price</span>`;
     if (k === "resid_mom") return `${num(r.v, 2)} <span class="small">z</span>`;
     if (k === "insider_buying") return `${isNum(r.v) ? "+" + r.v.toFixed(0) : "–"} <span class="small">net insiders</span>`;
     if (k === "earnings_reaction") return `${spct(r.v)} <span class="small">${esc(r.release || "")}</span>`;
@@ -324,6 +347,19 @@
     if (!x || !x.n) return '<span class="small">no data</span>';
     if (x.n < 24 || !isNum(x.ann_mean)) return `<span class="small">too short (${x.n} mo)</span>`;
     return `<span class="${cls(x.ann_mean)}">${spct(x.ann_mean)}</span> <span class="small">t ${num(x.t, 1)}</span>`;
+  }
+  function fdate(iso) {
+    if (!iso) return "–";
+    const d = new Date(iso + "T12:00:00");
+    const sameYear = d.getFullYear() === new Date().getFullYear();
+    return d.toLocaleDateString([], { month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
+  }
+  const SLOW = { mispricing: true, resid_mom: true };
+  function sinceCells(k, r) {
+    if (!r || !r.since) return `<td class="num small">–</td><td class="num">–</td><td class="num">–</td>`;
+    const rel = isNum(r.ret_since) && isNum(r.spy_since) ? r.ret_since - r.spy_since : null;
+    return `<td class="num">${r.capped ? "≤ " : ""}${fdate(r.since)}${SLOW[k] ? '<span class="small">*</span>' : ""}</td><td class="num">${isNum(r.px_since) ? "$" + r.px_since.toFixed(2) : "–"}</td>` +
+      `<td class="num"><span class="${cls(r.ret_since)}">${spct(r.ret_since)}</span><span class="nm">${isNum(rel) ? (rel >= 0 ? "+" : "") + (rel * 100).toFixed(1) + " pts vs SPY" : ""}</span></td>`;
   }
   function pageLeads() {
     const L = S.data.leads, B = (S.data.leads_backtest || {}).leads || {};
@@ -350,15 +386,17 @@
     }
     const conv = L.convergence || [];
     h += `<h2>${xb("convergence", "Flagged by two or more indicators")}</h2><p class="small">${esc(L.convergence_rule || "")}</p>`;
-    h += conv.length ? `<div class="table-wrap"><table><thead><tr><th>Stock</th><th>Sector</th><th>Bullish leads</th></tr></thead><tbody>` +
-      conv.map((c) => `<tr><td><span class="tk">${esc(c.t)}</span><span class="nm">${esc(c.n)}</span></td><td class="small">${esc(c.s)}</td><td>${c.leads.map((k) => xb(k, esc((L.leads[k] || {}).label || k), c.t, "chip", false)).join(" ")}</td></tr>`).join("") +
+    h += conv.length ? `<div class="table-wrap"><table><thead><tr><th>Stock</th><th>Sector</th><th class="num">Price now</th><th>Bullish leads (signal date)</th></tr></thead><tbody>` +
+      conv.map((c) => `<tr><td><span class="tk">${esc(c.t)}</span><span class="nm">${esc(c.n)}</span></td><td class="small">${esc(c.s)}</td><td class="num">${isNum(c.px) ? "$" + c.px.toFixed(2) : "–"}</td><td>${c.leads.map((k) => xb(k, `${esc((L.leads[k] || {}).label || k)}${(c.since || {})[k] ? ` <b>${fdate(c.since[k])}</b>` : ""}`, c.t, "chip", false)).join(" ")}</td></tr>`).join("") +
       `</tbody></table></div>` : `<p class="empty">No stock is flagged by two indicators today.</p>`;
     LEAD_ORDER.filter((k) => L.leads[k]).forEach((k) => {
       const x = L.leads[k];
-      const table = (rows, title) => rows.length ? `<div class="table-wrap"><table><thead><tr><th>${title}</th><th>Sector</th><th class="num">${esc(x.unit)}</th><th class="num">Percentile</th><th class="num">Price</th><th class="num">Market cap</th></tr></thead><tbody>` +
-        rows.map((r) => `<tr><td>${xb(k, `<span class="tk">${esc(r.t)}</span>`, r.t)}<span class="nm">${esc(r.n)}</span></td><td class="small">${esc(r.s)}</td><td class="num">${leadValue(k, r)}</td><td class="num">${pct(r.p, 0)}</td><td class="num">${isNum(r.px) ? "$" + r.px.toFixed(2) : "–"}</td><td class="num">${money(r.mc)}</td></tr>`).join("") +
-        `</tbody></table></div>` : `<p class="empty">Nothing flagged today.</p>`;
-      h += `<h2>${xb(k, esc(x.label))} ${leadStatus((B[k] || {}).status || x.status)}</h2><p class="small">${esc(x.short)}. Data for ${pct(x.coverage, 0)} of liquid stocks. ${x.n_bull} flagged${x.n_bull > x.bull.length ? `, top ${x.bull.length} shown` : ""}.</p>` + table(x.bull, "Flagged");
+      const table = (rows, title) => rows.length ? `<div class="table-wrap"><table><thead><tr><th>${title}</th><th>Sector</th><th class="num">${esc(x.unit)}</th><th class="num">Percentile</th><th class="num">Signal date ${xi("lead_since", "signal date")}</th><th class="num">Price then</th><th class="num">Since signal</th><th class="num">Price now</th><th class="num">Market cap</th></tr></thead><tbody>` +
+        rows.map((r) => `<tr><td>${xb(k, `<span class="tk">${esc(r.t)}</span>`, r.t)}<span class="nm">${esc(r.n)}</span></td><td class="small">${esc(r.s)}</td><td class="num">${leadValue(k, r)}</td><td class="num">${pct(r.p, 0)}</td>${sinceCells(k, r)}<td class="num">${isNum(r.px) ? "$" + r.px.toFixed(2) : "–"}</td><td class="num">${money(r.mc)}</td></tr>`).join("") +
+        `</tbody></table></div>` + (SLOW[k] ? `<p class="small">* Recalculated monthly; the date is the first month end of the current unbroken run. "≤" means it was flagged at every month end checked (12 months), so it started earlier.</p>` : "") : `<p class="empty">Nothing flagged today.</p>`;
+      const lv = x.live;
+      h += `<h2>${xb(k, esc(x.label))} ${leadStatus((B[k] || {}).status || x.status)}</h2><p class="small">${esc(x.short)}. Data for ${pct(x.coverage, 0)} of liquid stocks. ${x.n_bull} flagged${x.n_bull > x.bull.length ? `, top ${x.bull.length} shown` : ""}.
+        ${lv && lv.n ? `Live record since ${fdate(lv.started)}: ${lv.n} new signals, average ${spct(lv.avg_ret)} since the signal vs ${spct(lv.avg_spy)} for SPY.` : `Live record: tracking new signals since ${fdate(L.tracking_started)}.`}</p>` + table(x.bull, "Flagged");
       if (x.bear && x.bear.length) h += `<details><summary>Bearish side: ${x.n_bear} names at the other extreme</summary>${table(x.bear, "Bearish")}</details>`;
     });
     return h;
@@ -676,6 +714,7 @@
   }
   window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
   document.addEventListener("click", (e) => {
+    if (e.target.closest("#refresh-btn")) { manualRefresh(); return; }
     const xe = e.target.closest("[data-explain]");
     if (xe) { e.preventDefault(); openExplain(xe.dataset.explain, xe.dataset.ctx, xe); return; }
     if (e.target.closest("#xp-close") || e.target === xpBackdrop) { closeExplain(); return; }

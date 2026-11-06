@@ -84,6 +84,10 @@ def test_full_pipeline(patched):
     assert any(v["bull"] for v in ld["leads"].values())
     assert ld["etf_lead"]["eligible"] >= 10 and sum(r["flag"] for r in ld["etf_lead"]["rows"]) == ld["etf_lead"]["top"]
     assert all("counts" in v for v in ld["leads"].values())
+    rows = [r for v in ld["leads"].values() for r in v["bull"] + v["bear"]]
+    assert rows and all(r.get("since") and "px_since" in r for r in rows)
+    st = json.loads((out / "leads_state.json").read_text())
+    assert st["started"] and len(st["active"]) == sum(v["n_bull"] + v["n_bear"] for v in ld["leads"].values())
     st = json.loads((out / "stocks.json").read_text())
     assert len(st["rows"]) > 100
     # intraday run on top of the nightly state

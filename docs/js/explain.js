@@ -516,13 +516,16 @@
         (b.bearish_minus_universe ? P(`Bearish side (bottom 10%) vs universe: ${per(b.bearish_minus_universe.full)}.`) : "") +
         P("Tested on today's S&P 1500, so survivorship bias remains, though comparing flagged names with the same universe cancels much of it.");
     };
+    const SLOWK = { mispricing: true, resid_mom: true };
     const leadNow = (k, ctx, generic, perStock) => {
       const x = (LD().leads || {})[k];
       if (ctx) {
         const hit = leadRow(k, ctx);
         if (hit) {
           const others = leadsWith(ctx).filter((y) => y !== k);
-          return P(perStock(hit.r, hit.side)) + (others.length ? P(`${esc(ctx)} is also flagged by: ${others.map((y) => esc(((LD().leads || {})[y] || {}).label || y)).join(", ")}.`) : "") +
+          const r = hit.r, rel = H.isNum(r.ret_since) && H.isNum(r.spy_since) ? r.ret_since - r.spy_since : null;
+          const sinceTxt = r.since ? P(`<b>Signal date: ${r.capped ? "on or before " : ""}${esc(r.since)}${SLOWK[k] ? " (month end; flagged at least since then)" : ""}</b>, at a close of ${H.isNum(r.px_since) ? "$" + r.px_since.toFixed(2) : "–"}. Since then ${spct(r.ret_since)}${H.isNum(rel) ? `, ${rel >= 0 ? "ahead of" : "behind"} SPY by ${Math.abs(rel * 100).toFixed(1)} points` : ""}. Current price ${H.isNum(r.px) ? "$" + r.px.toFixed(2) : "–"}. ${H.isNum(r.ret_since) && r.ret_since > 0.15 ? "Much of the move may already be in the price; the backtest measures returns from the month end after a flag, not from the signal date." : ""}`) : "";
+          return P(perStock(hit.r, hit.side)) + sinceTxt + (others.length ? P(`${esc(ctx)} is also flagged by: ${others.map((y) => esc(((LD().leads || {})[y] || {}).label || y)).join(", ")}.`) : "") +
             P(`This indicator's status: <b>${esc((LB()[k] || {}).status || (x || {}).status || "not yet tested")}</b>. A flag is a reason to research the company, not a buy signal.`);
         }
       }
@@ -533,7 +536,7 @@
       short: "How far a company's market value sits from the value implied by its balance sheet and earnings, compared with similar companies in its sector.",
       now: (ctx) => leadNow("mispricing", ctx,
         "Each day the tool fits one model across all stocks: market value (scaled by total assets) explained by equity, liabilities, revenue, gross profit, operating income, profits, losses and the sector. A stock's fair value is what that model predicts. The top 10% by fair value over price are flagged as cheap, and the bottom 10% as expensive.",
-        (r, side) => `<b>${esc(r.t)}: fundamentals imply a value ${spct(r.v, 0)} ${r.v >= 0 ? "above" : "versus"} its market value</b>, which puts it in the ${pct(r.p, 0)} percentile (${side === "bull" ? "cheap end" : "expensive end"}). Market cap ${H.isNum(r.mc) ? "$" + (r.mc / 1e9).toFixed(1) + "B" : "–"}. Large gaps are often explained by things the model cannot see (a pending lawsuit, a one-off gain, a business in decline), so check the filings.`),
+        (r, side) => (H.isNum(r.v) && r.v > 3 ? `<b>${esc(r.t)}: the model's fair value is more than four times the market value.</b> A gap this large usually means a data problem (a wrong share count, a one-off gain, a financial company the model fits poorly) rather than a real bargain, so treat this flag with suspicion. ` : "") + `<b>${esc(r.t)}: fundamentals imply a value ${H.isNum(r.v) && r.v > 3 ? "far" : spct(r.v, 0)} ${r.v >= 0 ? "above" : "versus"} its market value</b>, which puts it in the ${pct(r.p, 0)} percentile (${side === "bull" ? "cheap end" : "expensive end"}). Market cap ${H.isNum(r.mc) ? "$" + (r.mc / 1e9).toFixed(1) + "B" : "–"}. Large gaps are often explained by things the model cannot see (a pending lawsuit, a one-off gain, a business in decline), so check the filings.`),
       use: "Use the cheap list as a starting point for valuation work. The model is a comps regression without judgment; large gaps can be data errors or real problems.",
       origin: P("Bartram and Grinblatt (2018) estimated each stock's fair value every month by regressing market capitalization on a few dozen accounting items across all US stocks, with no theory about which items matter (hence 'agnostic'). Stocks trading below fair value earned significantly higher returns, which standard risk factors did not explain. A 2021 follow-up by the same authors found similar results in international markets. This tool uses a smaller set of items, scales them by total assets so mega caps do not dominate the fit, and adds sector effects."),
       held: P("The method is recent, so independent out-of-sample evidence is limited. Like other value-type signals it can take a long time to pay off, and errors in reported financial data create false positives."),
@@ -626,6 +629,10 @@
       "<b>Validated</b>: flagged stocks beat the liquid universe with t ≥ 3 over the full period, and did so both before and after 2011. <b>Promising</b>: t ≥ 2 and positive in both periods (or only post-2011 data exists). <b>Unproven</b>: everything else, including indicators that worked in reverse.",
       "A t of 3 is a deliberately high bar: with many indicators tested, a t of 2 is easy to reach by luck (Harvey, Liu & Zhu 2016). Free data starts in 2004 (prices), 2008 (insider filings), 2009 (earnings releases) and about 2010 (fundamentals), so some indicators have little or no pre-2011 history. Opportunistic insider buying needs three years of each insider's history, so it starts in 2011. The sector-ETF lead is judged on Ken French's 49 industries since 1963.",
       "Out-of-sample testing and higher t-stat thresholds guard against data mining.", ["Harvey, Liu & Zhu (2016), …and the Cross-Section of Expected Returns, Review of Financial Studies"]);
+    M.lead_since = mE("Signal date", "When the current flag started, the closing price that day, and the return since.",
+      "Earnings reaction: the day the 3-day reaction window closed (the day after the release day), which is when this tool could first have flagged it. Insider buying: the filing date on which net opportunistic buying turned positive. Abnormal volume: the first day of the current volume spike. Mispricing and residual momentum are recalculated monthly, so their date is the first month end of the current unbroken run. Returns are total returns; SPY over the same days is shown for comparison.",
+      "Use it to judge how stale a lead is. A stock that has already run up since the signal may have less left; the backtests measure returns from the month end after a flag.",
+      "Every flag is also logged from the day it starts (docs/data/leads_state.json), building a live record that cannot be fitted after the fact.");
     M.convergence = mE("Flagged by two or more", "Stocks that appear on at least two bullish lead lists today, counting only indicators with a positive record.",
       "Independent signals pointing the same way are more informative than any single one, as long as they measure different things (for example insider buying plus a cheap fundamental value). An indicator counts only if its flagged names beat the universe before costs over its full backtest; indicators with a negative record (for example abnormal volume) are left out.",
       "The best place to start research.", "Combining weakly correlated signals improves reliability; this is the logic of multi-factor models.");

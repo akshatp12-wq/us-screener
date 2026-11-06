@@ -262,3 +262,11 @@ body.xp-open { overflow: hidden; }
 .kv .xp-i { display: inline-grid; font-size: 10px; color: var(--muted); }
 .kv .xp-l { display: inline; font-size: inherit; color: inherit; }
 tr.lead-flag td:first-child { box-shadow: inset 3px 0 0 var(--series-1); }
+#refresh-btn { margin-right: 6px; }
+#refresh-btn:disabled { opacity: 0.6; cursor: progress; }
+@media (prefers-reduced-motion: no-preference) {
+  #refresh-btn.spinning { animation: spin 0.9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+}
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.updated a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }

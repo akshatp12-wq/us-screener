@@ -495,3 +495,30 @@ def test_lead_status_rules():
     assert lead_status(mk(0.04, 0.03, 2.3), CFG)["status"] == "Promising"
     assert lead_status(mk(-0.02, 0.05, 2.5), CFG)["status"] == "Unproven"
     assert lead_status(mk(0.0, 0.05, 3.5, n=0), CFG)["status"] == "Promising"   # no pre-2011 data caps it
+
+
+def test_signal_start_dates():
+    from screener.signals.leads import insider_signal_dates, month_end_streak, volume_streak_start
+    # insider: an owner with 3 years of history in May (routine) and two opportunistic buyers
+    rows = []
+    for y, m10, m11 in ((2021, "02", "03"), (2022, "06", "07"), (2023, "09", "11")):
+        rows += [(1, 9, f"{y}-05-10", f"{y}-05-12", -1, 1e5), (1, 10, f"{y}-{m10}-10", f"{y}-{m10}-12", -1, 1e5),
+                 (1, 11, f"{y}-{m11}-10", f"{y}-{m11}-12", -1, 1e5)]
+    rows += [(1, 10, "2024-04-01", "2024-04-03", 1, 2e5), (1, 11, "2024-05-20", "2024-05-22", 1, 1e5),
+             (1, 9, "2024-05-10", "2024-05-12", 1, 9e5)]
+    ins = pd.DataFrame(rows, columns=["issuer_cik", "owner_cik", "trans_date", "filed", "side", "value"])
+    ins["trans_date"], ins["filed"] = pd.to_datetime(ins["trans_date"]), pd.to_datetime(ins["filed"])
+    d = insider_signal_dates(ins, pd.Timestamp("2024-06-28"), [1], 180, 1)
+    assert d[1] == pd.Timestamp("2024-04-03")   # owner 9 trades every May (routine) and is ignored
+    # volume streak
+    idx = pd.bdate_range("2024-01-01", periods=90)
+    v = pd.DataFrame({"AAA": 1e6}, index=idx)
+    v.iloc[-4:, 0] = 5e6
+    s = volume_streak_start(v, ["AAA"], 0.3, idx[-1], 5, 50)
+    assert s["AAA"] >= idx[-4] and s["AAA"] <= idx[-2]
+    # month-end streak
+    h = {"2024-03-31": {"resid_mom": ["X"]}, "2024-04-30": {"resid_mom": ["Y"]}, "2024-05-31": {"resid_mom": ["X", "Y"]},
+         "2024-06-30": {"resid_mom": ["X", "Y"]}}
+    assert month_end_streak(h, "resid_mom", "Y", list(h)) == pd.Timestamp("2024-04-30")
+    assert month_end_streak(h, "resid_mom", "X", list(h)) == pd.Timestamp("2024-05-31")
+    assert month_end_streak(h, "resid_mom", "Z", list(h)) is None

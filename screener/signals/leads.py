@@ -214,13 +214,13 @@ def earnings_reactions(ret_d: pd.DataFrame, mkt: pd.Series, releases: dict, cik_
 def latest_reaction(table: pd.DataFrame, asof, max_age_days: int = 75) -> pd.DataFrame:
     """Most recent reaction whose window has closed by `asof` and whose release is within `max_age_days`."""
     if table is None or table.empty:
-        return pd.DataFrame(columns=["ear", "release"])
+        return pd.DataFrame(columns=["ear", "release", "known"])
     asof = pd.Timestamp(asof)
     x = table[(table["known"] <= asof) & (table["release"] > asof - pd.Timedelta(days=max_age_days))]
     if x.empty:
-        return pd.DataFrame(columns=["ear", "release"])
+        return pd.DataFrame(columns=["ear", "release", "known"])
     x = x.sort_values("release").groupby("ticker").tail(1).set_index("ticker")
-    return x[["ear", "release"]]
+    return x[["ear", "release", "known"]]
 
 
 # ----------------------------------------------------------------------------- 5. abnormal volume
@@ -269,6 +269,7 @@ def compute_leads(df: pd.DataFrame, panels: dict, asof, cfg: dict, ret_m: pd.Dat
     er = latest_reaction(reactions, asof, max_age_days or lc["earnings_reaction"]["max_age_days"])
     out["earnings_reaction"] = er["ear"].reindex(df.index) if not er.empty else np.nan
     out["release"] = er["release"].reindex(df.index) if not er.empty else pd.NaT
+    out["known"] = er["known"].reindex(df.index) if not er.empty else pd.NaT
     av = lc["abnormal_volume"]
     out["abnormal_volume"] = abnormal_volume(panels.get("volume"), asof, av["recent_days"], av["base_days"]).reindex(df.index)
     out["ret_5d"] = recent_return(ret_d.reindex(columns=df.index), asof, av["recent_days"]).reindex(df.index)
@@ -307,3 +308,68 @@ def etf_monthly(ret_d: pd.DataFrame, tickers: list[str], asof=None) -> pd.DataFr
     r = ret_d.loc[:pd.Timestamp(asof) if asof is not None else None, cols]
     m = (1 + r.fillna(0)).resample("ME").prod() - 1
     return m.where(r.notna().resample("ME").sum() >= 15)
+
+
+# ----------------------------------------------------------------------------- when did each flag start?
+def insider_signal_dates(ins: pd.DataFrame | None, asof, ciks, window_days: int = 180, min_net: int = 1) -> dict:
+    """Per issuer CIK: the filing date on which net opportunistic insider buying (within the window) last
+    rose to `min_net` or more, i.e. the start of the current insider signal."""
+    from .stock import classify_insiders
+    if ins is None or ins.empty:
+        return {}
+    asof = pd.Timestamp(asof)
+    want = set(int(c) for c in ciks if pd.notna(c))
+    x = ins[ins["issuer_cik"].isin(want)]
+    kinds = classify_insiders(x, asof)
+    opp = kinds[kinds["kind"] == "opportunistic"][["issuer_cik", "owner_cik"]]
+    rec = x[(x["filed"] <= asof) & (x["trans_date"] > asof - pd.Timedelta(days=window_days))]
+    rec = rec.merge(opp, on=["issuer_cik", "owner_cik"], how="inner")
+    out = {}
+    for cik, g in rec.groupby("issuer_cik"):
+        cum: dict = {}
+        start = None
+        for d, gd in g.sort_values("filed").groupby("filed"):
+            for o, sd, v in zip(gd["owner_cik"], gd["side"], gd["value"]):
+                cum[o] = cum.get(o, 0.0) + sd * (v if pd.notna(v) else 1.0)
+            net = sum(1 if v > 0 else -1 if v < 0 else 0 for v in cum.values())
+            if net >= min_net:
+                start = start or d
+            else:
+                start = None
+        if start is not None:
+            out[int(cik)] = pd.Timestamp(start)
+    return out
+
+
+def volume_streak_start(volume: pd.DataFrame | None, tickers, cutoff: float, asof, recent: int = 5,
+                        base: int = 50, lookback: int = 30) -> dict:
+    """First trading day of the current run in which abnormal volume stayed at or above `cutoff`."""
+    if volume is None or volume.empty or not len(tickers):
+        return {}
+    cols = [t for t in tickers if t in volume.columns]
+    v = volume.loc[:pd.Timestamp(asof), cols].replace(0, np.nan).iloc[-(lookback + recent + base):]
+    abn = np.log(v.rolling(recent, min_periods=recent - 1).mean() / v.shift(recent).rolling(base, min_periods=int(base * 0.8)).mean())
+    abn = abn.iloc[-lookback:]
+    out = {}
+    for t in cols:
+        a = abn[t]
+        on = (a >= cutoff - 1e-12).to_numpy()
+        if not len(on) or not on[-1]:
+            continue
+        i = len(on) - 1
+        while i > 0 and on[i - 1]:
+            i -= 1
+        out[t] = a.index[i]
+    return out
+
+
+def month_end_streak(history: dict, key: str, ticker: str, month_ends: list) -> pd.Timestamp | None:
+    """Earliest month end in the unbroken run (counting back from the latest) where `ticker` was in
+    history[month_end][key]."""
+    since = None
+    for m in sorted(month_ends, reverse=True):
+        if ticker in set(history.get(m, {}).get(key, [])):
+            since = pd.Timestamp(m)
+        else:
+            break
+    return since

@@ -133,7 +133,7 @@ def build_fundamentals(cfg, f, cache, univ):
 
 # ============================================================================= lead indicators
 @stage("lead indicators")
-def build_leads(cfg, f, cache, out, df, panels, insiders):
+def build_leads(cfg, f, cache, out, df, panels, insiders, univ=None, derived=None):
     """Today's flagged names for each lead indicator -> leads.json (evidence from leads_backtest.json)."""
     from screener.portfolio.construct import liquid_mask
     from screener.signals import leads as ld
@@ -159,6 +159,8 @@ def build_leads(cfg, f, cache, out, df, panels, insiders):
     F = ld.flags(L, liq, cfg)
     ev = (_read(out, "leads_backtest.json") or {}).get("leads", {})
     n = int(lc["max_list"])
+    since = lead_since(cfg, cache, L, F, df, panels, insiders, factors, liq, univ, derived, asof)
+    state, live = lead_state(out, F, since, panels, asof)
 
     def row(tk, k):
         v = L.at[tk, k]
@@ -171,6 +173,13 @@ def build_leads(cfg, f, cache, out, df, panels, insiders):
             r["release"] = pd.Timestamp(L.at[tk, "release"]).strftime("%Y-%m-%d")
         if k == "abnormal_volume":
             r["ret_5d"] = None if pd.isna(L.at[tk, "ret_5d"]) else float(L.at[tk, "ret_5d"])
+        return r
+
+    def with_since(r, k, side):
+        e = state["active"].get(f"{k}|{side}|{r['t']}")
+        if e:
+            r.update({"since": e["since"], "px_since": e.get("px"), "ret_since": e.get("ret"), "spy_since": e.get("spy"),
+                      "backfilled": e["since"] < state["started"], "capped": bool(e.get("capped"))})
         return r
 
     payload = {"generated": utcnow(), "asof": asof, "universe": int(liq.sum()), "leads": {}, "convergence": [],
@@ -190,11 +199,15 @@ def build_leads(cfg, f, cache, out, df, panels, insiders):
             **meta, "counts": counts, "status": e.get("status", "Not yet tested"), "reason": e.get("reason", "The weekly backtest has not run yet."),
             "coverage": float(L.loc[liq[liq].index, k].notna().mean()) if k in L else 0.0,
             "n_bull": int(len(bull)), "n_bear": int(len(bear)),
-            "bull": [row(tk, k) for tk in bull.index[:n]], "bear": [row(tk, k) for tk in bear.index[:n]],
+            "bull": [with_since(row(tk, k), k, "bull") for tk in bull.index[:n]],
+            "bear": [with_since(row(tk, k), k, "bear") for tk in bear.index[:n]],
+            "live": live.get(k),
         }
     conv = sorted(((tk, ks) for tk, ks in hits.items() if len(ks) >= 2), key=lambda x: -len(x[1]))
     payload["convergence"] = [{"t": tk, "n": df.at[tk, "name"] if "name" in df else "", "s": df.at[tk, "sector"] if "sector" in df else "",
-                               "leads": ks} for tk, ks in conv[:40]]
+                               "leads": ks, "since": {k: (state["active"].get(f"{k}|bull|{tk}") or {}).get("since") for k in ks},
+                               "px": None if pd.isna(df.at[tk, "price"]) else float(df.at[tk, "price"])} for tk, ks in conv[:40]]
+    payload["tracking_started"] = state["started"]
     # sector / industry ETFs ranked by residual momentum
     eb = (_read(out, "leads_backtest.json") or {}).get("etf_lead", {})
     etfs = ld.etf_universe(cfg)
@@ -213,6 +226,149 @@ def build_leads(cfg, f, cache, out, df, panels, insiders):
     }
     write_json(out / "leads.json", payload)
     return payload
+
+
+def _px_on(close: pd.DataFrame | None, t: str, d) -> float | None:
+    if close is None or t not in close:
+        return None
+    s = close[t].loc[:pd.Timestamp(d)].dropna()
+    return float(s.iloc[-1]) if len(s) else None
+
+
+def _ret_between(ret: pd.DataFrame, t: str, a, b) -> float | None:
+    if t not in ret:
+        return None
+    r = ret[t].loc[(ret.index > pd.Timestamp(a)) & (ret.index <= pd.Timestamp(b))]
+    return float((1 + r.fillna(0)).prod() - 1) if len(r) else 0.0
+
+
+def lead_since(cfg, cache, L, F, df, panels, insiders, factors, liq, univ, derived, asof) -> dict:
+    """{(lead, side, ticker): date the current flag started}. Event leads use the event date; slow leads
+    (mispricing, residual momentum) use month-end history, cached in .cache/leads_monthly.pkl."""
+    from screener.data.sec import snapshot
+    from screener.portfolio.construct import liquid_mask
+    from screener.signals import leads as ld
+    from screener.signals.stock import compute_stock_signals, first_trade_dates
+    lc = cfg["leads"]
+    ret_d = panels["ret"]
+    out: dict = {}
+    # month-end history for the slow leads
+    hp = cache / "leads_monthly.pkl"
+    hist = pd.read_pickle(hp) if hp.exists() else {}
+    tick = [t for t in df.index if t in ret_d.columns]
+    ret_m = (1 + ret_d[tick].fillna(0)).resample("ME").prod() - 1
+    ret_m = ret_m.where(ret_d[tick].notna().resample("ME").sum() > 0)
+    first_of_month = pd.Timestamp(asof).normalize().replace(day=1)
+    mes = [m for m in ret_m.index if m < first_of_month][-12:]   # complete month ends only
+    share = lc["flag_share"]
+    rm_cfg = lc["residual_momentum"]
+    fd = first_trade_dates(ret_d[tick])
+    blank = pd.DataFrame(np.nan, index=tick, columns=["vol", "beta"])
+    changed = False
+    for m in mes:
+        key = m.strftime("%Y-%m-%d")
+        if key in hist:
+            continue
+        rec = {}
+        rm = ld.residual_momentum(ret_m, factors, m, rm_cfg["window_months"], rm_cfg["formation_months"], rm_cfg["skip_months"])
+        rm = rm.reindex(liq[liq].index).dropna()
+        rec["resid_mom"] = list(rm.index[rm >= rm.quantile(1 - share)]) if len(rm) >= 20 else []
+        if derived and univ is not None:
+            try:
+                dfm = compute_stock_signals(univ, snapshot(derived, m), panels, m, cfg, insiders=None, short=None,
+                                            ret_m=ret_m.loc[:m], vb=blank, first_dates=fd)
+                g = ld.mispricing(dfm, lc["mispricing"]["winsor"], lc["mispricing"]["min_names"])
+                g = g.reindex(dfm.index[liquid_mask(dfm, cfg).fillna(False)]).dropna()
+                if len(g) >= 20:
+                    rec["mispricing"] = list(g.index[g >= g.quantile(1 - share)])
+                    rec["mispricing_bear"] = list(g.index[g <= g.quantile(share)])
+            except Exception as e:  # noqa: BLE001
+                log.warning("month-end mispricing %s failed: %s", key, e)
+        hist[key] = rec
+        changed = True
+    if changed:
+        hist = {k: hist[k] for k in sorted(hist)[-24:]}
+        pd.to_pickle(hist, hp)
+    keys = [k for k in sorted(hist) if k in {m.strftime("%Y-%m-%d") for m in mes}]
+    first = pd.Timestamp(keys[0]) if keys else None
+    for side in ("bull", "bear"):
+        for t in F.get("mispricing", {}).get(side, []):
+            d = ld.month_end_streak(hist, "mispricing" if side == "bull" else "mispricing_bear", t, keys)
+            if d is not None:
+                out[("mispricing", side, t)] = d
+                if d == first:
+                    out[("_capped", "mispricing", side, t)] = True
+    for t in F.get("resid_mom", {}).get("bull", []):
+        d = ld.month_end_streak(hist, "resid_mom", t, keys)
+        if d is not None:
+            out[("resid_mom", "bull", t)] = d
+            if d == first:
+                out[("_capped", "resid_mom", "bull", t)] = True
+    for side in ("bull", "bear"):
+        for t in F.get("earnings_reaction", {}).get(side, []):
+            if pd.notna(L.at[t, "known"]):
+                out[("earnings_reaction", side, t)] = pd.Timestamp(L.at[t, "known"])
+    ib = list(F.get("insider_buying", {}).get("bull", []))
+    if ib and insiders is not None and "cik" in df:
+        dates = ld.insider_signal_dates(insiders, asof, df.loc[ib, "cik"].tolist(), lc["insider_buying"]["window_days"],
+                                        lc["insider_buying"]["min_net"])
+        for t in ib:
+            c = df.at[t, "cik"]
+            if pd.notna(c) and int(c) in dates:
+                out[("insider_buying", "bull", t)] = dates[int(c)]
+    av = list(F.get("abnormal_volume", {}).get("bull", []))
+    if av:
+        cut = float(L.loc[av, "abnormal_volume"].min())
+        for t, d in ld.volume_streak_start(panels.get("volume"), av, cut, asof, lc["abnormal_volume"]["recent_days"],
+                                           lc["abnormal_volume"]["base_days"]).items():
+            out[("abnormal_volume", "bull", t)] = d
+    return out
+
+
+def lead_state(out, F, since, panels, asof):
+    """Track every flag from the day it starts (docs/data/leads_state.json): signal date, price, return
+    since, and closed signals for a live record. Returns (state, per-lead live summary)."""
+    ret, close = panels["ret"], panels.get("close")
+    spy = "SPY" if "SPY" in ret else None
+    today = pd.Timestamp(asof).strftime("%Y-%m-%d")
+    old = _read(out, "leads_state.json") or {}
+    state = {"started": old.get("started", today), "active": {}, "closed": list(old.get("closed", []))}
+    prev = old.get("active", {})
+    for k, sides in F.items():
+        for side, names in sides.items():
+            for t in names:
+                key = f"{k}|{side}|{t}"
+                if key in prev:
+                    e = dict(prev[key])
+                else:
+                    d = since.get((k, side, t), pd.Timestamp(asof))
+                    e = {"lead": k, "side": side, "t": t, "since": pd.Timestamp(d).strftime("%Y-%m-%d"), "px": _px_on(close, t, d),
+                         "capped": bool(since.get(("_capped", k, side, t)))}
+                e["ret"] = _ret_between(ret, t, e["since"], asof)
+                e["spy"] = _ret_between(ret, spy, e["since"], asof) if spy else None
+                e["last"] = today
+                state["active"][key] = e
+    for key, e in prev.items():
+        if key not in state["active"]:
+            e = dict(e)
+            e.update({"until": today, "px_out": _px_on(close, e["t"], asof), "ret": _ret_between(ret, e["t"], e["since"], asof),
+                      "spy": _ret_between(ret, spy, e["since"], asof) if spy else None})
+            state["closed"].append(e)
+    state["closed"] = state["closed"][-3000:]
+    live: dict = {}
+    for e in list(state["active"].values()) + state["closed"]:
+        if e["side"] != "bull" or e["since"] < state["started"] or e["since"] >= today:
+            continue
+        x = live.setdefault(e["lead"], {"n": 0, "ret": 0.0, "spy": 0.0})
+        x["n"] += 1
+        x["ret"] += e.get("ret") or 0.0
+        x["spy"] += e.get("spy") or 0.0
+    for k, x in live.items():
+        x["avg_ret"], x["avg_spy"] = x["ret"] / x["n"], x["spy"] / x["n"]
+        x["started"] = state["started"]
+        del x["ret"], x["spy"]
+    write_json(out / "leads_state.json", {"generated": utcnow(), **state})
+    return state, live
 
 
 # ============================================================================= orchestration
@@ -524,7 +680,7 @@ def run_live(cfg, f, cache, out, full: bool) -> list[str]:
             write_json(out / "stocks.json", stocks_payload(df, res, fl, whys, cfg, panels["ret"].index[-1]))
             write_json(out / "events.json", events_payload(cfg, earnings))
             written += ["stocks.json", "events.json"]
-            if build_leads(cfg, f, cache, out, df, panels, insiders):
+            if build_leads(cfg, f, cache, out, df, panels, insiders, univ, derived):
                 written.append("leads.json")
             mode_scores = {m: res[m] for m in cfg["modes"]}
             port = build_portfolios(cfg, df, res, whys, reg, panels, _read(out, "portfolio.json"))
