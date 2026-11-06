@@ -36,10 +36,11 @@ LEADS = {
     },
     "insider_buying": {
         "label": "Opportunistic insider buying",
-        "short": "More opportunistic insiders buying than selling over 6 months (routine traders excluded)",
+        "short": "More opportunistic insiders buying than selling over 6 months (routine traders excluded); "
+                 "the bearish side is net opportunistic selling",
         "unit": "net insiders",
         "cite": "Cohen, Malloy & Pomorski (2012), Decoding Inside Information, Journal of Finance",
-        "bearish": False,
+        "bearish": True,
     },
     "earnings_reaction": {
         "label": "Earnings reaction",
@@ -287,7 +288,8 @@ def flags(leads: pd.DataFrame, liquid: pd.Series, cfg: dict) -> dict[str, dict[s
             continue
         s = leads.loc[liq, k].dropna()
         if k == "insider_buying":
-            res[k] = {"bull": s.index[s >= lc["insider_buying"]["min_net"]], "bear": pd.Index([])}
+            mn = lc["insider_buying"]["min_net"]
+            res[k] = {"bull": s.index[s >= mn], "bear": s.index[s <= -mn]}
             continue
         if len(s) < 20 or s.nunique() < 5:
             res[k] = {"bull": pd.Index([]), "bear": pd.Index([])}
@@ -311,9 +313,11 @@ def etf_monthly(ret_d: pd.DataFrame, tickers: list[str], asof=None) -> pd.DataFr
 
 
 # ----------------------------------------------------------------------------- when did each flag start?
-def insider_signal_dates(ins: pd.DataFrame | None, asof, ciks, window_days: int = 180, min_net: int = 1) -> dict:
+def insider_signal_dates(ins: pd.DataFrame | None, asof, ciks, window_days: int = 180, min_net: int = 1,
+                         direction: int = 1) -> dict:
     """Per issuer CIK: the filing date on which net opportunistic insider buying (within the window) last
-    rose to `min_net` or more, i.e. the start of the current insider signal."""
+    rose to `min_net` or more, i.e. the start of the current insider signal. direction=-1 does the same
+    for net selling (net count at or below -min_net)."""
     from .stock import classify_insiders
     if ins is None or ins.empty:
         return {}
@@ -332,7 +336,7 @@ def insider_signal_dates(ins: pd.DataFrame | None, asof, ciks, window_days: int 
             for o, sd, v in zip(gd["owner_cik"], gd["side"], gd["value"]):
                 cum[o] = cum.get(o, 0.0) + sd * (v if pd.notna(v) else 1.0)
             net = sum(1 if v > 0 else -1 if v < 0 else 0 for v in cum.values())
-            if net >= min_net:
+            if net * direction >= min_net:
                 start = start or d
             else:
                 start = None

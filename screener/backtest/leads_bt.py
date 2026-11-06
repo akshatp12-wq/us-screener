@@ -195,7 +195,12 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
                "avg_flagged": float(ser(rec[k]["n"]).mean()), "avg_new_share": float(new.mean()) if len(new) else None,
                "first_month": fx.index[0].strftime("%Y-%m")}
         if rec[k]["bear"]:
-            res["bearish_minus_universe"] = _period_stats(ser(rec[k]["bear"]), split)
+            bs = ser(rec[k]["bear"])
+            res["bearish_minus_universe"] = _period_stats(bs, split)
+            # bearish side "works" when its names lag the universe: judge it on the negated series
+            bst = lead_status(_period_stats(-bs, split), cfg)
+            bst["reason"] = bst["reason"].replace("flagged names did worse than the universe", "bearish names did better than the universe")
+            res["bear_status"] = bst
         if rec[k]["spread"]:
             res["top30_minus_bottom30"] = _period_stats(ser(rec[k]["spread"]), split)
         ic = ser(rec[k]["ic"])
@@ -221,6 +226,8 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         "Universe is today's S&P 1500 (survivorship-biased); flagged-minus-universe nets out much of that bias.",
         "Status: Validated = t >= 3 over the full period and positive both before and after 2011; Promising = t >= 2 "
         "(and positive in both periods where there is pre-2011 data); otherwise Unproven.",
+        "Bearish sides (bottom 10%, or net opportunistic insider selling) get their own status, judged on how much "
+        "their names lagged the universe.",
         "Opportunistic insider buying needs three years of each insider's history to separate routine from "
         "opportunistic traders; free filings start in 2008, so it can only be tested from 2011.",
         "The sector-ETF lead's status comes from the 49-industry test since 1963; the test on today's ETFs "

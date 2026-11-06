@@ -197,6 +197,7 @@ def build_leads(cfg, f, cache, out, df, panels, insiders, univ=None, derived=Non
                 hits.setdefault(tk, []).append(k)
         payload["leads"][k] = {
             **meta, "counts": counts, "status": e.get("status", "Not yet tested"), "reason": e.get("reason", "The weekly backtest has not run yet."),
+            "bear_status": (e.get("bear_status") or {}).get("status"), "bear_reason": (e.get("bear_status") or {}).get("reason"),
             "coverage": float(L.loc[liq[liq].index, k].notna().mean()) if k in L else 0.0,
             "n_bull": int(len(bull)), "n_bear": int(len(bear)),
             "bull": [with_since(row(tk, k), k, "bull") for tk in bull.index[:n]],
@@ -308,14 +309,15 @@ def lead_since(cfg, cache, L, F, df, panels, insiders, factors, liq, univ, deriv
         for t in F.get("earnings_reaction", {}).get(side, []):
             if pd.notna(L.at[t, "known"]):
                 out[("earnings_reaction", side, t)] = pd.Timestamp(L.at[t, "known"])
-    ib = list(F.get("insider_buying", {}).get("bull", []))
-    if ib and insiders is not None and "cik" in df:
-        dates = ld.insider_signal_dates(insiders, asof, df.loc[ib, "cik"].tolist(), lc["insider_buying"]["window_days"],
-                                        lc["insider_buying"]["min_net"])
-        for t in ib:
-            c = df.at[t, "cik"]
-            if pd.notna(c) and int(c) in dates:
-                out[("insider_buying", "bull", t)] = dates[int(c)]
+    for side, direction in (("bull", 1), ("bear", -1)):
+        ib = list(F.get("insider_buying", {}).get(side, []))
+        if ib and insiders is not None and "cik" in df:
+            dates = ld.insider_signal_dates(insiders, asof, df.loc[ib, "cik"].tolist(), lc["insider_buying"]["window_days"],
+                                            lc["insider_buying"]["min_net"], direction)
+            for t in ib:
+                c = df.at[t, "cik"]
+                if pd.notna(c) and int(c) in dates:
+                    out[("insider_buying", side, t)] = dates[int(c)]
     av = list(F.get("abnormal_volume", {}).get("bull", []))
     if av:
         cut = float(L.loc[av, "abnormal_volume"].min())

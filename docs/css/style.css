@@ -270,3 +270,10 @@ tr.lead-flag td:first-child { box-shadow: inset 3px 0 0 var(--series-1); }
 }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .updated a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+/* click-to-sort table headers */
+th .th-sort { all: unset; cursor: pointer; display: inline; }
+th .th-sort:hover { text-decoration: underline; text-underline-offset: 3px; }
+th .th-sort:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 2px; }
+th[aria-sort="ascending"] .th-ind::after { content: " ▲"; font-size: 0.8em; }
+th[aria-sort="descending"] .th-ind::after { content: " ▼"; font-size: 0.8em; }
+th[aria-sort="ascending"], th[aria-sort="descending"] { color: var(--ink); }

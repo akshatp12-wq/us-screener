@@ -522,3 +522,20 @@ def test_signal_start_dates():
     assert month_end_streak(h, "resid_mom", "Y", list(h)) == pd.Timestamp("2024-04-30")
     assert month_end_streak(h, "resid_mom", "X", list(h)) == pd.Timestamp("2024-05-31")
     assert month_end_streak(h, "resid_mom", "Z", list(h)) is None
+
+
+def test_insider_bearish_side_and_selling_dates():
+    from screener.signals.leads import flags, insider_signal_dates
+    idx = [f"S{i}" for i in range(40)]
+    L = pd.DataFrame({"insider_buying": [0.0] * 40}, index=idx)
+    L.loc["S1", "insider_buying"], L.loc["S2", "insider_buying"], L.loc["S3", "insider_buying"] = 1.0, -1.0, -3.0
+    F = flags(L, pd.Series(True, index=idx), CFG)
+    assert set(F["insider_buying"]["bull"]) == {"S1"} and set(F["insider_buying"]["bear"]) == {"S2", "S3"}
+    rows = []
+    for y, m in ((2021, "02"), (2022, "06"), (2023, "09")):
+        rows.append((1, 10, f"{y}-{m}-10", f"{y}-{m}-12", 1, 1e5))
+    rows.append((1, 10, "2024-05-01", "2024-05-03", -1, 4e5))
+    ins = pd.DataFrame(rows, columns=["issuer_cik", "owner_cik", "trans_date", "filed", "side", "value"])
+    ins["trans_date"], ins["filed"] = pd.to_datetime(ins["trans_date"]), pd.to_datetime(ins["filed"])
+    assert insider_signal_dates(ins, pd.Timestamp("2024-06-28"), [1], 180, 1, -1)[1] == pd.Timestamp("2024-05-03")
+    assert 1 not in insider_signal_dates(ins, pd.Timestamp("2024-06-28"), [1], 180, 1, 1)

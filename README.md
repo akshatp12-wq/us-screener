@@ -211,6 +211,9 @@ closes; insider buying to the filing that turned net buying positive; abnormal v
 the spike; mispricing and residual momentum to the first month end of the current run. Every flag is
 logged from the day it starts in `docs/data/leads_state.json`, which builds a live record per indicator.
 
+Bearish lists (bottom 10%, and net opportunistic insider selling) get their own status, judged on how far their
+names lagged the universe. Every table on every tab sorts by any column: click a header (again to reverse).
+
 The dashboard's ↻ button reloads the latest published data. "Recompute ↗" opens the pipeline on GitHub,
 where **Run workflow** recalculates everything (about 5–20 minutes; the page picks it up automatically).
 

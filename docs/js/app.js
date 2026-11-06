@@ -112,6 +112,76 @@
     });
   }
 
+  // ------------------------------------------------------------------ click-to-sort for every table
+  S.tsort = {};
+  const MONTHS = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+  function sortKey(td) {
+    if (!td) return null;
+    if (td.dataset.v !== undefined) { const n = parseFloat(td.dataset.v); return isNaN(n) ? td.dataset.v.toLowerCase() : n; }
+    const t = td.textContent.replace(/\s+/g, " ").trim();
+    if (!t || /^(–|—|-|no data|n\/a|not yet tested)$/i.test(t) || /^too short/i.test(t)) return null;
+    const c = t.replace(/^[≤≥<>]\s*/, "").replace(/\*/g, "").replace(/−/g, "-");
+    let m = c.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?/);
+    if (m) return Date.UTC(+m[1], +m[2] - 1, m[3] ? +m[3] : 1);
+    m = c.match(/^([A-Z][a-z]{2}) (\d{1,2})(?:, (\d{4}))?\b/);
+    if (m && m[1] in MONTHS) return Date.UTC(m[3] ? +m[3] : new Date().getFullYear(), MONTHS[m[1]], +m[2]);
+    m = c.replace(/,/g, "").match(/^([+-]?)\$?(\d+(?:\.\d+)?)\s*(%|B\b|M\b|K\b|T\b|×)?/);
+    if (m) return (m[1] === "-" ? -1 : 1) * parseFloat(m[2]) * ({ B: 1e9, M: 1e6, K: 1e3, T: 1e12 }[m[3]] || 1);
+    return t.toLowerCase();
+  }
+  function sortTable(tb, col, dir) {
+    const body = tb.tBodies[0];
+    if (!body) return;
+    const rows = [...body.rows].map((r, i) => ({ r, i, k: sortKey(r.cells[col]) }));
+    rows.sort((a, b) => {
+      if (a.k === null && b.k === null) return a.i - b.i;
+      if (a.k === null) return 1;
+      if (b.k === null) return -1;
+      const an = typeof a.k === "number", bn = typeof b.k === "number";
+      const c = an && bn ? a.k - b.k : an ? -1 : bn ? 1 : String(a.k).localeCompare(String(b.k));
+      return (c || a.i - b.i) * (c ? dir : 1);
+    });
+    rows.forEach((x) => body.appendChild(x.r));
+    [...tb.tHead.rows[0].cells].forEach((th, i) => th.setAttribute("aria-sort", i === col ? (dir > 0 ? "ascending" : "descending") : "none"));
+  }
+  function enhanceTables() {
+    document.querySelectorAll("#view table").forEach((tb, i) => {
+      const tid = S.page + ":" + i;
+      tb.dataset.tid = tid;
+      const head = tb.tHead, body = tb.tBodies[0];
+      if (!head || head.rows.length !== 1 || !body || body.rows.length < 2) return;
+      if (tb.querySelector("th button[data-sort]") || body.querySelector("tr.detail")) return;   // stocks table sorts itself
+      const ths = [...head.rows[0].cells];
+      if (ths.some((c) => c.colSpan > 1)) return;
+      ths.forEach((th) => {
+        if (th.querySelector(".th-sort") || !th.textContent.trim()) return;
+        const b = document.createElement("button");
+        b.type = "button"; b.className = "th-sort"; b.title = "Sort by this column";
+        [...th.childNodes].filter((n) => !(n.nodeType === 1 && (n.classList.contains("xp-icon") || n.classList.contains("xp")))).forEach((n) => b.appendChild(n));
+        const ind = document.createElement("span"); ind.className = "th-ind"; ind.setAttribute("aria-hidden", "true");
+        b.appendChild(ind);
+        th.insertBefore(b, th.firstChild);
+        th.setAttribute("aria-sort", "none");
+      });
+      tb.classList.add("sortable");
+      const st = S.tsort[tid];
+      if (st && st.col < ths.length) sortTable(tb, st.col, st.dir);
+    });
+  }
+  function onSortClick(btn) {
+    const th = btn.closest("th"), tb = btn.closest("table");
+    const col = th.cellIndex, tid = tb.dataset.tid;
+    const prev = S.tsort[tid];
+    let dir;
+    if (prev && prev.col === col) dir = -prev.dir;
+    else {   // numbers and dates start high-to-low, text starts A-Z
+      const k = [...tb.tBodies[0].rows].map((r) => sortKey(r.cells[col])).find((x) => x !== null);
+      dir = typeof k === "number" ? -1 : 1;
+    }
+    S.tsort[tid] = { col, dir };
+    sortTable(tb, col, dir);
+  }
+
   // ------------------------------------------------------------------ data loading
   async function getJSON(name, v) {
     const r = await fetch(DATA + name + ".json?v=" + encodeURIComponent(v || Date.now()), { cache: "no-store" });
@@ -338,7 +408,7 @@
     if (!r) return "–";
     if (k === "mispricing") return isNum(r.v) && r.v > 3 ? `>+300% <span class="small" title="A gap this large usually means a data problem (share count, a one-off item). Check the filings.">check data</span>` : `${spct(r.v, 0)} <span class="small">fair value vs price</span>`;
     if (k === "resid_mom") return `${num(r.v, 2)} <span class="small">z</span>`;
-    if (k === "insider_buying") return `${isNum(r.v) ? "+" + r.v.toFixed(0) : "–"} <span class="small">net insiders</span>`;
+    if (k === "insider_buying") return `${isNum(r.v) ? (r.v > 0 ? "+" : "") + r.v.toFixed(0) : "–"} <span class="small">net insiders</span>`;
     if (k === "earnings_reaction") return `${spct(r.v)} <span class="small">${esc(r.release || "")}</span>`;
     if (k === "abnormal_volume") return `${isNum(r.v) ? Math.exp(r.v).toFixed(1) + "×" : "–"} <span class="small">5-day ${spct(r.ret_5d)}</span>`;
     return num(r.v);
@@ -370,7 +440,8 @@
       <h2>${xb("lead_status", "Evidence")}</h2>
       <div class="table-wrap"><table><thead><tr><th>Indicator</th><th>Status</th><th class="num">Flagged now</th><th class="num">Before 2011, vs universe / yr</th><th class="num">2011 on</th><th class="num">Full period, net of costs</th><th class="num">Since</th><th>In 2+ list ${xi("convergence", "two-plus list")}</th></tr></thead><tbody>` +
       LEAD_ORDER.filter((k) => L.leads[k]).map((k) => { const x = L.leads[k], b = B[k] || {}, f = b.flagged_minus_universe || {}, n = b.net_of_costs || {};
-        return `<tr><td>${xb(k, esc(x.label))}<span class="nm">${esc(x.short)}</span></td><td>${leadStatus(b.status || x.status)}<span class="nm" title="${esc(b.reason || x.reason || "")}">${esc(b.reason || x.reason || "")}</span></td>
+        const bst = (b.bear_status || {}).status || x.bear_status;
+        return `<tr><td>${xb(k, esc(x.label))}<span class="nm">${esc(x.short)}</span></td><td>${leadStatus(b.status || x.status)}<span class="nm" title="${esc(b.reason || x.reason || "")}">${esc(b.reason || x.reason || "")}</span>${bst ? `<span class="nm">Bearish side: ${esc(bst)}</span>` : ""}</td>
           <td class="num">${x.n_bull}${x.n_bear ? ` <span class="small">/ ${x.n_bear} bearish</span>` : ""}</td><td class="num">${leadPeriod(f.pre)}</td><td class="num">${leadPeriod(f.post)}</td><td class="num">${leadPeriod(n.full)}</td><td class="num small">${esc(b.first_month || "–")}</td><td class="small">${x.counts === false ? "No" : "Yes"}</td></tr>`; }).join("") +
       (L.etf_lead ? (() => { const e = L.etf_lead, eb = (S.data.leads_backtest || {}).etf_lead || {}, r = (eb.industry || {}).residual || {};
         return `<tr><td>${xb("etf_resid_mom", esc(e.label))}<span class="nm">Sector and industry ETFs</span></td><td>${leadStatus(eb.status || e.status)}<span class="nm" title="${esc(eb.reason || e.reason || "")}">${esc(eb.reason || e.reason || "")}</span></td>
@@ -397,7 +468,11 @@
       const lv = x.live;
       h += `<h2>${xb(k, esc(x.label))} ${leadStatus((B[k] || {}).status || x.status)}</h2><p class="small">${esc(x.short)}. Data for ${pct(x.coverage, 0)} of liquid stocks. ${x.n_bull} flagged${x.n_bull > x.bull.length ? `, top ${x.bull.length} shown` : ""}.
         ${lv && lv.n ? `Live record since ${fdate(lv.started)}: ${lv.n} new signals, average ${spct(lv.avg_ret)} since the signal vs ${spct(lv.avg_spy)} for SPY.` : `Live record: tracking new signals since ${fdate(L.tracking_started)}.`}</p>` + table(x.bull, "Flagged");
-      if (x.bear && x.bear.length) h += `<details><summary>Bearish side: ${x.n_bear} names at the other extreme</summary>${table(x.bear, "Bearish")}</details>`;
+      if (x.bear && x.bear.length) {
+        const bb = (B[k] || {}).bear_status || {}, bm = ((B[k] || {}).bearish_minus_universe || {}).full || {};
+        const label = k === "insider_buying" ? "net opportunistic insider selling" : "names at the other extreme";
+        h += `<details${k === "insider_buying" ? " open" : ""}><summary>Bearish side: ${x.n_bear} ${label} · ${leadStatus(bb.status || x.bear_status)} ${isNum(bm.ann_mean) ? `<span class="small">${spct(bm.ann_mean)} a year vs universe, t ${num(bm.t, 1)}</span>` : ""}</summary>${table(x.bear, "Bearish")}</details>`;
+      }
     });
     return h;
   }
@@ -423,7 +498,7 @@
     let rows = s.rows.filter((r) => (!f.sector || r.s === f.sector) && (!f.flag || (r.fl || []).includes(f.flag)) &&
       (!f.liquid || !(r.fl || []).includes("illiquid")) && (!q || r.t.includes(q) || String(r.n || "").toUpperCase().includes(q)));
     const k = S.sort.key, dir = S.sort.dir;
-    const val = (r) => k === "score" ? r.m[S.mode] : k === "t" ? r.t : k === "mc" ? r.mc : r.f[k];
+    const val = (r) => k === "score" ? r.m[S.mode] : k === "t" ? r.t : k === "mc" ? r.mc : k === "fl" ? (r.fl || []).length || null : r.f[k];
     rows.sort((a, b) => { const va = val(a), vb = val(b); if (va === vb) return 0; if (va == null) return 1; if (vb == null) return -1; return (va > vb ? 1 : -1) * dir; });
     return rows;
   }
@@ -446,7 +521,7 @@
         <input type="search" data-filter="q" placeholder="Search ticker or name" value="${esc(S.filters.q)}" aria-label="Search">
       </div>
       <p class="small">${rows.length} stocks. Tap a row for the factor breakdown. Data coverage: ${Object.entries(s.coverage || {}).map(([k, v]) => esc(short[k] || k) + " " + pct(v, 0)).join(", ")}.</p>
-      <div class="table-wrap"><table><thead><tr><th>#</th>${head("t", "Stock", false)}${head("score", "Score")}${cols.map((c) => head(c, short[c])).join("")}<th>Flags</th></tr></thead><tbody>`;
+      <div class="table-wrap"><table><thead><tr><th>#</th>${head("t", "Stock", false)}${head("score", "Score")}${cols.map((c) => head(c, short[c])).join("")}${head("fl", "Flags", false)}</tr></thead><tbody>`;
     rows.slice(0, S.stockLimit).forEach((r, i) => {
       const sc = r.m[S.mode];
       h += `<tr class="clickable" data-open="${esc(r.t)}" tabindex="0" aria-expanded="${S.open.has(r.t)}"><td class="num small">${i + 1}</td><td><span class="tk">${esc(r.t)}</span><span class="nm">${esc(r.n)} · ${esc(r.s)}</span></td>
@@ -710,11 +785,13 @@
     try { html = PAGES[S.page](); } catch (e) { html = `<p class="empty">Couldn't draw this page: ${esc(e.message)}</p>`; console.error(e); }
     view.innerHTML = html;
     wireCharts(view);
+    enhanceTables();
     document.title = "US Screener · " + ($(".tabs a[aria-current=page]") || {}).textContent;
   }
   window.addEventListener("hashchange", () => { render(); window.scrollTo(0, 0); });
   document.addEventListener("click", (e) => {
     if (e.target.closest("#refresh-btn")) { manualRefresh(); return; }
+    const tsb = e.target.closest(".th-sort"); if (tsb) { onSortClick(tsb); return; }
     const xe = e.target.closest("[data-explain]");
     if (xe) { e.preventDefault(); openExplain(xe.dataset.explain, xe.dataset.ctx, xe); return; }
     if (e.target.closest("#xp-close") || e.target === xpBackdrop) { closeExplain(); return; }
