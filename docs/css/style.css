@@ -261,3 +261,4 @@ summary { cursor: pointer; font-weight: 650; color: var(--ink-2); font-size: 14p
 body.xp-open { overflow: hidden; }
 .kv .xp-i { display: inline-grid; font-size: 10px; color: var(--muted); }
 .kv .xp-l { display: inline; font-size: inherit; color: inherit; }
+tr.lead-flag td:first-child { box-shadow: inset 3px 0 0 var(--series-1); }

@@ -439,18 +439,29 @@ def test_residual_momentum_ranks_idiosyncratic_winner_first():
     assert s.rank(pct=True)["S3"] > s.rank(pct=True)["S4"]
 
 
-def test_insider_cluster_counts_distinct_net_buyers():
-    from screener.signals.leads import insider_cluster
-    d = pd.Timestamp("2024-06-28")
-    ins = pd.DataFrame({
-        "issuer_cik": [1, 1, 1, 1, 2, 2],
-        "owner_cik": [10, 11, 12, 13, 20, 21],
-        "trans_date": pd.to_datetime(["2024-06-01", "2024-06-10", "2024-05-20", "2024-06-20", "2024-06-05", "2024-03-01"]),
-        "filed": pd.to_datetime(["2024-06-03", "2024-06-12", "2024-05-22", "2024-07-02", "2024-06-07", "2024-03-03"]),
-        "side": [1, 1, -1, 1, 1, 1], "value": [1e5, 2e5, 5e5, 1e5, 3e4, 1e4]})
-    c = insider_cluster(ins, d, 60)
-    assert c.loc[1, "buyers"] == 2        # owner 12 sold; owner 13's filing comes after the date
-    assert c.loc[2, "buyers"] == 1        # owner 21 bought outside the window
+def test_insider_buying_flags_net_opportunistic_buyers():
+    from screener.signals.leads import flags
+    idx = [f"S{i}" for i in range(60)]
+    L = pd.DataFrame({"insider_buying": [0.0] * 60}, index=idx)
+    L.loc["S1", "insider_buying"] = 2.0
+    L.loc["S2", "insider_buying"] = 1.0
+    L.loc["S3", "insider_buying"] = -1.0
+    F = flags(L, pd.Series(True, index=idx), CFG)
+    assert set(F["insider_buying"]["bull"]) == {"S1", "S2"}
+
+
+def test_etf_universe_and_ranking():
+    from screener.signals.leads import etf_monthly, etf_universe, residual_momentum
+    u = etf_universe(CFG)
+    assert "XLK" in u and "SPY" not in u and "TLT" not in u
+    rng = np.random.default_rng(3)
+    idx = pd.bdate_range("2019-01-01", "2023-06-30")
+    ret = pd.DataFrame({t: rng.normal(0.0003, 0.01, len(idx)) for t in u[:12]}, index=idx)
+    ret.loc[ret.index[-260]:ret.index[-25], u[0]] += 0.002     # persistent industry-specific strength
+    m = etf_monthly(ret, u[:12])
+    f = pd.DataFrame({"mkt": m.mean(axis=1), "rf": 0.0}, index=m.index)
+    s = residual_momentum(m, f, m.index[-1], 36, 12, 1)
+    assert s.idxmax() == u[0]
 
 
 def test_earnings_reaction_measures_the_announcement_move():

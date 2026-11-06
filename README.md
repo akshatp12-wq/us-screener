@@ -194,15 +194,20 @@ for speeding up money you were going to invest anyway, not for holding cash.
 
 ## Lead indicators (Leads page)
 
-Five stock-level signals flag companies worth researching. They do not change the strategy scores.
+Five stock-level signals and one sector-ETF signal flag names worth researching. They do not change the strategy scores.
 
 | Indicator | What it flags | Source study | Free history |
 |---|---|---|---|
-| Insider cluster buying | Two or more insiders buying in the open market within 60 days | Cohen, Malloy & Pomorski (2012) | 2008 on |
+| Opportunistic insider buying | More opportunistic insiders buying than selling over 6 months (routine traders excluded) | Cohen, Malloy & Pomorski (2012) | 2011 on (needs 3 years of history per insider) |
 | Fundamental mispricing | Market value far below (or above) the value implied by fundamentals, by sector | Bartram & Grinblatt (2018), scaled by assets | about 2010 on |
 | Residual momentum | 12-1 month return net of market, size and value exposure | Blitz, Huij & Martens (2011) | 2007 on; industries 1963 on |
 | Earnings reaction | Market-adjusted 3-day return around the latest earnings release | Chan, Jegadeesh & Lakonishok (1996) | 2009 on |
 | Abnormal volume | Last week's volume vs the prior 50 days | Gervais, Kaniel & Mingelgrin (2001) | 2004 on |
+| Sector ETF residual momentum | Top sector and industry ETFs by residual momentum (separate ETF list) | Blitz, Huij & Martens (2011); Moskowitz & Grinblatt (1999) | 49 industries 1963 on; ETFs 2007 on |
+
+The "flagged by two or more" list counts only indicators whose flagged names beat the universe before costs
+over their full backtest. A first version used "two or more insiders buying within 60 days"; it showed no edge
+and was replaced by the opportunistic-insider rule above.
 
 The weekly job backtests each one (`docs/data/leads_backtest.json`): each month the flagged names' next-month
 return is compared with the liquid universe, split at 2011. Status: **Validated** (t ≥ 3, positive before and

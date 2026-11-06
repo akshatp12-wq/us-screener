@@ -4,11 +4,13 @@ backtest (screener/backtest/leads_bt.py). None of them feeds the mode scores.
   mispricing         fundamental value vs market value, a scaled version of Bartram & Grinblatt (2018)
   resid_mom          residual momentum: 12-1 month return net of market/size/value exposure (Blitz,
                      Huij & Martens 2011)
-  insider_cluster    two or more insiders buying in the open market within 60 days (Cohen, Malloy &
-                     Pomorski 2012 for the informativeness of insider purchases)
+  insider_buying     more opportunistic insiders buying than selling over 180 days, routine traders
+                     excluded (Cohen, Malloy & Pomorski 2012)
   earnings_reaction  market-adjusted return over the 3 trading days around the latest earnings release
                      (Chan, Jegadeesh & Lakonishok 1996)
   abnormal_volume    last week's trading volume vs the prior 50 days (Gervais, Kaniel & Mingelgrin 2001)
+  etf_resid_mom      sector and industry ETFs ranked by residual momentum (separate list; evidence from
+                     Ken French's 49 industries since 1963)
 
 All functions use only information available at `asof`.
 """
@@ -32,10 +34,10 @@ LEADS = {
         "cite": "Blitz, Huij & Martens (2011), Residual Momentum, Journal of Empirical Finance",
         "bearish": False,
     },
-    "insider_cluster": {
-        "label": "Insider cluster buying",
-        "short": "Two or more insiders buying in the open market within 60 days",
-        "unit": "insiders buying",
+    "insider_buying": {
+        "label": "Opportunistic insider buying",
+        "short": "More opportunistic insiders buying than selling over 6 months (routine traders excluded)",
+        "unit": "net insiders",
         "cite": "Cohen, Malloy & Pomorski (2012), Decoding Inside Information, Journal of Finance",
         "bearish": False,
     },
@@ -53,6 +55,13 @@ LEADS = {
         "cite": "Gervais, Kaniel & Mingelgrin (2001), The High-Volume Return Premium, Journal of Finance",
         "bearish": False,
     },
+}
+
+ETF_LEAD = {
+    "label": "Sector ETF residual momentum",
+    "short": "Sector and industry ETFs whose past-year return, net of market, size and value, ranks highest",
+    "unit": "residual z",
+    "cite": "Blitz, Huij & Martens (2011), Residual Momentum, Journal of Empirical Finance; Moskowitz & Grinblatt (1999)",
 }
 
 
@@ -164,27 +173,8 @@ def ff3_monthly(ff3: pd.DataFrame | None) -> pd.DataFrame | None:
     return out
 
 
-# ----------------------------------------------------------------------------- 3. insider cluster buying
-def insider_cluster(ins: pd.DataFrame | None, asof, window_days: int = 60) -> pd.DataFrame:
-    """Per issuer CIK: distinct insiders with net open-market purchases in the last `window_days`
-    (only filings made by `asof`), and the dollar value bought."""
-    cols = ["buyers", "value"]
-    if ins is None or ins.empty:
-        return pd.DataFrame(columns=cols)
-    asof = pd.Timestamp(asof)
-    x = ins[(ins["filed"] <= asof) & (ins["trans_date"] > asof - pd.Timedelta(days=window_days)) &
-            (ins["trans_date"] <= asof)]
-    if x.empty:
-        return pd.DataFrame(columns=cols)
-    v = x["value"].fillna(0.0) * x["side"]
-    per = v.groupby([x["issuer_cik"], x["owner_cik"]]).sum()
-    buyers = per[per > 0]
-    if buyers.empty:
-        return pd.DataFrame(columns=cols)
-    g = buyers.groupby(level=0)
-    out = pd.DataFrame({"buyers": g.size().astype(float), "value": g.sum()})
-    out.index = out.index.astype(int)
-    return out
+# ----------------------------------------------------------------------------- 3. opportunistic insider buying
+# Uses insider_scores() from screener/signals/stock.py (Cohen-Malloy-Pomorski classification).
 
 
 # ----------------------------------------------------------------------------- 4. earnings reaction
@@ -270,13 +260,12 @@ def compute_leads(df: pd.DataFrame, panels: dict, asof, cfg: dict, ret_m: pd.Dat
     rm = residual_momentum(ret_m.reindex(columns=df.index), factors, asof, rmc["window_months"],
                            rmc["formation_months"], rmc["skip_months"])
     out["resid_mom"] = rm.reindex(df.index)
-    icl = insider_cluster(insiders, asof, lc["insider_cluster"]["window_days"])
-    if "cik" in df and not icl.empty:
-        out["insider_cluster"] = df["cik"].map(icl["buyers"]).fillna(0.0)
-        out["insider_value"] = df["cik"].map(icl["value"])
+    if insiders is not None and not insiders.empty and "cik" in df:
+        from .stock import insider_scores
+        sc = insider_scores(insiders, asof, lc["insider_buying"]["window_days"])
+        out["insider_buying"] = df["cik"].map(sc).astype(float) if len(sc) else np.nan
     else:
-        out["insider_cluster"] = 0.0 if insiders is not None and not insiders.empty else np.nan
-        out["insider_value"] = np.nan
+        out["insider_buying"] = np.nan
     er = latest_reaction(reactions, asof, max_age_days or lc["earnings_reaction"]["max_age_days"])
     out["earnings_reaction"] = er["ear"].reindex(df.index) if not er.empty else np.nan
     out["release"] = er["release"].reindex(df.index) if not er.empty else pd.NaT
@@ -296,8 +285,8 @@ def flags(leads: pd.DataFrame, liquid: pd.Series, cfg: dict) -> dict[str, dict[s
         if k not in leads:
             continue
         s = leads.loc[liq, k].dropna()
-        if k == "insider_cluster":
-            res[k] = {"bull": s.index[s >= lc["insider_cluster"]["min_insiders"]], "bear": pd.Index([])}
+        if k == "insider_buying":
+            res[k] = {"bull": s.index[s >= lc["insider_buying"]["min_net"]], "bear": pd.Index([])}
             continue
         if len(s) < 20 or s.nunique() < 5:
             res[k] = {"bull": pd.Index([]), "bear": pd.Index([])}
@@ -305,3 +294,16 @@ def flags(leads: pd.DataFrame, liquid: pd.Series, cfg: dict) -> dict[str, dict[s
         hi, lo = s.quantile(1 - share), s.quantile(share)
         res[k] = {"bull": s.index[s >= hi], "bear": s.index[s <= lo] if LEADS[k]["bearish"] else pd.Index([])}
     return res
+
+
+# ----------------------------------------------------------------------------- sector ETF residual momentum
+def etf_universe(cfg: dict) -> list[str]:
+    kinds = set(cfg["leads"]["etf"]["kinds"])
+    return [t for t, m in cfg["etfs"]["list"].items() if m.get("kind") in kinds]
+
+
+def etf_monthly(ret_d: pd.DataFrame, tickers: list[str], asof=None) -> pd.DataFrame:
+    cols = [t for t in tickers if t in ret_d.columns]
+    r = ret_d.loc[:pd.Timestamp(asof) if asof is not None else None, cols]
+    m = (1 + r.fillna(0)).resample("ME").prod() - 1
+    return m.where(r.notna().resample("ME").sum() >= 15)

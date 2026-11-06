@@ -309,13 +309,13 @@
   }
 
   // ------------------------------------------------------------------ lead indicators
-  const LEAD_ORDER = ["insider_cluster", "mispricing", "resid_mom", "earnings_reaction", "abnormal_volume"];
+  const LEAD_ORDER = ["insider_buying", "mispricing", "resid_mom", "earnings_reaction", "abnormal_volume"];
   const leadStatus = (s) => st(s === "Validated" ? "green" : s === "Promising" ? "amber" : "unavailable", s || "Not yet tested");
   function leadValue(k, r) {
     if (!r) return "–";
     if (k === "mispricing") return `${spct(r.v, 0)} <span class="small">fair value vs price</span>`;
     if (k === "resid_mom") return `${num(r.v, 2)} <span class="small">z</span>`;
-    if (k === "insider_cluster") return `${isNum(r.v) ? r.v.toFixed(0) : "–"} buyers <span class="small">${money(r.value)}</span>`;
+    if (k === "insider_buying") return `${isNum(r.v) ? "+" + r.v.toFixed(0) : "–"} <span class="small">net insiders</span>`;
     if (k === "earnings_reaction") return `${spct(r.v)} <span class="small">${esc(r.release || "")}</span>`;
     if (k === "abnormal_volume") return `${isNum(r.v) ? Math.exp(r.v).toFixed(1) + "×" : "–"} <span class="small">5-day ${spct(r.ret_5d)}</span>`;
     return num(r.v);
@@ -329,17 +329,27 @@
     const L = S.data.leads, B = (S.data.leads_backtest || {}).leads || {};
     if (!L || !L.leads) return unavailable("Lead indicators");
     const ind = (S.data.leads_backtest || {}).industry_residual_momentum;
-    let h = `<h1>Lead indicators</h1><p class="lede">Stocks worth researching, flagged by five signals with published support. Each one is backtested on its own; none of them changes the mode scores. A flag is a reason to look closer, not a buy signal. ${xb("leads_overview", "How to use this page", null, "xp-link")}</p>
+    let h = `<h1>Lead indicators</h1><p class="lede">Stocks and sector ETFs worth researching, flagged by signals with published support. Each one is backtested on its own; none of them changes the mode scores. A flag is a reason to look closer, not a buy signal. ${xb("leads_overview", "How to use this page", null, "xp-link")}</p>
       <p class="small">As of ${esc(L.asof)} · ${L.universe} liquid stocks (S&P 1500, $5M+/day, price above $5).</p>
       <h2>${xb("lead_status", "Evidence")}</h2>
-      <div class="table-wrap"><table><thead><tr><th>Indicator</th><th>Status</th><th class="num">Flagged now</th><th class="num">Before 2011, flagged vs universe / yr</th><th class="num">2011 on</th><th class="num">Full period, net of costs</th><th class="num">Tested since</th></tr></thead><tbody>` +
+      <div class="table-wrap"><table><thead><tr><th>Indicator</th><th>Status</th><th class="num">Flagged now</th><th class="num">Before 2011, vs universe / yr</th><th class="num">2011 on</th><th class="num">Full period, net of costs</th><th class="num">Since</th><th>In 2+ list ${xi("convergence", "two-plus list")}</th></tr></thead><tbody>` +
       LEAD_ORDER.filter((k) => L.leads[k]).map((k) => { const x = L.leads[k], b = B[k] || {}, f = b.flagged_minus_universe || {}, n = b.net_of_costs || {};
         return `<tr><td>${xb(k, esc(x.label))}<span class="nm">${esc(x.short)}</span></td><td>${leadStatus(b.status || x.status)}<span class="nm" title="${esc(b.reason || x.reason || "")}">${esc(b.reason || x.reason || "")}</span></td>
-          <td class="num">${x.n_bull}${x.n_bear ? ` <span class="small">/ ${x.n_bear} bearish</span>` : ""}</td><td class="num">${leadPeriod(f.pre)}</td><td class="num">${leadPeriod(f.post)}</td><td class="num">${leadPeriod(n.full)}</td><td class="num small">${esc(b.first_month || "–")}</td></tr>`; }).join("") +
+          <td class="num">${x.n_bull}${x.n_bear ? ` <span class="small">/ ${x.n_bear} bearish</span>` : ""}</td><td class="num">${leadPeriod(f.pre)}</td><td class="num">${leadPeriod(f.post)}</td><td class="num">${leadPeriod(n.full)}</td><td class="num small">${esc(b.first_month || "–")}</td><td class="small">${x.counts === false ? "No" : "Yes"}</td></tr>`; }).join("") +
+      (L.etf_lead ? (() => { const e = L.etf_lead, eb = (S.data.leads_backtest || {}).etf_lead || {}, r = (eb.industry || {}).residual || {};
+        return `<tr><td>${xb("etf_resid_mom", esc(e.label))}<span class="nm">Sector and industry ETFs</span></td><td>${leadStatus(eb.status || e.status)}<span class="nm" title="${esc(eb.reason || e.reason || "")}">${esc(eb.reason || e.reason || "")}</span></td>
+          <td class="num">top ${e.top} of ${e.eligible}</td><td class="num">${leadPeriod(r.pre)}</td><td class="num">${leadPeriod(r.post)}</td><td class="num"><span class="small">gross; industries</span></td><td class="num small">${r.full && r.full.start ? esc(r.full.start) : "–"}</td><td class="small">n/a</td></tr>`; })() : "") +
       `</tbody></table></div>`;
     if (ind && ind.residual && ind.residual.full) h += `<p class="small">Residual momentum on Ken French's 49 industries (survivorship-free): ${spct(ind.residual.pre && ind.residual.pre.ann_mean)} a year over the market before 2011 (t ${num(ind.residual.pre && ind.residual.pre.t, 1)}), ${spct(ind.residual.post && ind.residual.post.ann_mean)} since (t ${num(ind.residual.post && ind.residual.post.t, 1)}); raw momentum ${spct(ind.raw.pre && ind.raw.pre.ann_mean)} and ${spct(ind.raw.post && ind.raw.post.ann_mean)}.</p>`;
+    if (L.etf_lead && (L.etf_lead.rows || []).length) {
+      const e = L.etf_lead, eb = (S.data.leads_backtest || {}).etf_lead || {}, et = (eb.etfs || {}).residual || {};
+      h += `<h2>${xb("etf_resid_mom", esc(e.label))} ${leadStatus(eb.status || e.status)}</h2><p class="small">${esc(e.short)}. Top ${e.top} flagged. Check on today's ETFs since 2007: ${leadPeriod(et.full)} a year vs all eligible ETFs.</p>
+        <div class="table-wrap"><table><thead><tr><th>#</th><th>ETF</th><th>Type</th><th class="num">Residual momentum</th><th class="num">12–1 month return</th></tr></thead><tbody>` +
+        e.rows.slice(0, Math.max(e.top + 4, 12)).map((r) => `<tr${r.flag ? ' class="lead-flag"' : ""}><td class="num small">${r.rank}</td><td>${xb("etf_resid_mom", `<span class="tk">${esc(r.t)}</span>`, r.t)}<span class="nm">${esc(r.n)}</span></td><td class="small">${esc(r.kind)}</td><td class="num">${num(r.v, 2)}</td><td class="num ${cls(r.ret_12m)}">${spct(r.ret_12m)}</td></tr>`).join("") +
+        `</tbody></table></div>`;
+    }
     const conv = L.convergence || [];
-    h += `<h2>${xb("convergence", "Flagged by two or more indicators")}</h2>`;
+    h += `<h2>${xb("convergence", "Flagged by two or more indicators")}</h2><p class="small">${esc(L.convergence_rule || "")}</p>`;
     h += conv.length ? `<div class="table-wrap"><table><thead><tr><th>Stock</th><th>Sector</th><th>Bullish leads</th></tr></thead><tbody>` +
       conv.map((c) => `<tr><td><span class="tk">${esc(c.t)}</span><span class="nm">${esc(c.n)}</span></td><td class="small">${esc(c.s)}</td><td>${c.leads.map((k) => xb(k, esc((L.leads[k] || {}).label || k), c.t, "chip", false)).join(" ")}</td></tr>`).join("") +
       `</tbody></table></div>` : `<p class="empty">No stock is flagged by two indicators today.</p>`;

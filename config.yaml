@@ -319,9 +319,10 @@ leads:
   cost_round_trip: 0.003        # backtest cost per newly flagged name
   mispricing: {winsor: 0.01, min_names: 100}
   residual_momentum: {window_months: 36, formation_months: 12, skip_months: 1}
-  insider_cluster: {window_days: 60, min_insiders: 2}
+  insider_buying: {window_days: 180, min_net: 1}   # net opportunistic insiders (Cohen-Malloy-Pomorski)
   earnings_reaction: {max_age_days: 75, live_max_age_days: 30}
   abnormal_volume: {recent_days: 5, base_days: 50}
+  etf: {kinds: [sector, industry], top: 8}         # sector-ETF residual momentum list
   status: {validated_t: 3.0, promising_t: 2.0, min_pre_months: 24, split: "2011-01-01"}
 
 # ----------------------------------------------------------------------------- events

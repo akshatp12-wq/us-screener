@@ -17,7 +17,8 @@ import pandas as pd
 
 from ..data.sec import snapshot
 from ..portfolio.construct import liquid_mask
-from ..signals.leads import LEADS, compute_leads, earnings_reactions, ff3_monthly, flags, residual_momentum
+from ..signals.leads import (ETF_LEAD, LEADS, compute_leads, earnings_reactions, etf_monthly, etf_universe,
+                             ff3_monthly, flags, residual_momentum)
 from ..signals.stock import compute_stock_signals, first_trade_dates, momentum_12_1
 from ..util import ann_stats
 from .metrics import newey_west_t
@@ -88,6 +89,32 @@ def industry_residual_momentum(ind49: pd.DataFrame | None, ff3: pd.DataFrame | N
                     "residuals from a 36-month Fama-French three-factor regression. Survivorship-free. Gross of costs."}
 
 
+def etf_residual_momentum(ret_d: pd.DataFrame, cfg: dict, ff3: pd.DataFrame | None, split: pd.Timestamp) -> dict:
+    """Top-N sector/industry ETFs by residual (and raw) momentum minus all eligible ETFs, equal-weighted.
+    Today's ETF list only, so funds that closed are missing; gross of costs."""
+    factors = ff3_monthly(ff3)
+    if factors is None:
+        return {"status": "unavailable"}
+    top = int(cfg["leads"]["etf"]["top"])
+    m = etf_monthly(ret_d, etf_universe(cfg))
+    res, raw = [], []
+    for i, t in enumerate(m.index[:-1]):
+        nxt = m.iloc[i + 1]
+        rm = residual_momentum(m, factors, t, 36, 12, 1).dropna()
+        rm = rm[nxt.reindex(rm.index).notna()]
+        if len(rm) < 2 * top:
+            continue
+        ew = nxt.reindex(rm.index).mean()
+        res.append((m.index[i + 1], float(nxt.reindex(rm.nlargest(top).index).mean() - ew)))
+        mm = momentum_12_1(m, t, 12, 1).reindex(rm.index).dropna()
+        if len(mm) >= 2 * top:
+            raw.append((m.index[i + 1], float(nxt.reindex(mm.nlargest(top).index).mean() - ew)))
+    rs, ms = pd.Series(dict(res)).sort_index(), pd.Series(dict(raw)).sort_index()
+    return {"residual": _period_stats(rs, split), "raw": _period_stats(ms, split),
+            "note": f"Top {top} of today's sector and industry ETFs by residual momentum vs all eligible ETFs, "
+                    "equal-weighted, next month. Short history and today's ETF list only; gross of costs."}
+
+
 def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dict, insiders: pd.DataFrame | None = None,
                        releases: dict | None = None, ff3: pd.DataFrame | None = None, ind49: pd.DataFrame | None = None,
                        bench: str = "SPY") -> dict:
@@ -134,7 +161,7 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
             s = L.loc[liq[liq].index, k].dropna() if k in L else pd.Series(dtype=float)
             r = nxt.reindex(s.index)
             bull = F.get(k, {}).get("bull", pd.Index([]))
-            minimum = 3 if k == "insider_cluster" else 10
+            minimum = 3 if k == "insider_buying" else 10
             if len(bull) >= minimum:
                 fx = float(nxt.reindex(bull).mean() - um)
                 rec[k]["fx"].append((nd, fx))
@@ -145,7 +172,7 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
             bear = F.get(k, {}).get("bear", pd.Index([]))
             if len(bear) >= 10:
                 rec[k]["bear"].append((nd, float(nxt.reindex(bear).mean() - um)))
-            if k != "insider_cluster" and len(s) >= 100 and s.nunique() >= 10:
+            if k != "insider_buying" and len(s) >= 100 and s.nunique() >= 10:
                 hi, lo = s.quantile(0.7), s.quantile(0.3)
                 rec[k]["spread"].append((nd, float(r[s >= hi].mean() - r[s <= lo].mean())))
                 ok = r.notna()
@@ -178,13 +205,25 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         curve = (1 + fx).cumprod()
         res["curve"] = [[d.strftime("%Y-%m"), round(float(v), 4)] for d, v in curve.items()]
         out["leads"][k] = res
-    out["industry_residual_momentum"] = industry_residual_momentum(ind49, ff3, split)
+    ind = industry_residual_momentum(ind49, ff3, split)
+    out["industry_residual_momentum"] = ind
+    etf_lead = {"label": ETF_LEAD["label"], "industry": ind, "etfs": etf_residual_momentum(ret_d, cfg, ff3, split)}
+    if isinstance(ind.get("residual"), dict):
+        etf_lead.update(lead_status(ind["residual"], cfg))
+        etf_lead["evidence_basis"] = "Ken French 49 industries, 1963 on (survivorship-free)"
+    else:
+        etf_lead.update({"status": "Unproven", "reason": "industry data unavailable"})
+    out["etf_lead"] = etf_lead
     out["notes"] = [
-        "Flagged = top 10% of liquid stocks on the indicator (two or more insider buyers for clusters). Returns are the "
+        "Flagged = top 10% of liquid stocks on the indicator (net opportunistic insider buying of 1 or more for insiders). Returns are the "
         "next month's, equal-weighted, minus the equal-weighted liquid universe.",
         f"Net of costs assumes {cost:.1%} round trip on every newly flagged name each month.",
         "Universe is today's S&P 1500 (survivorship-biased); flagged-minus-universe nets out much of that bias.",
         "Status: Validated = t >= 3 over the full period and positive both before and after 2011; Promising = t >= 2 "
         "(and positive in both periods where there is pre-2011 data); otherwise Unproven.",
+        "Opportunistic insider buying needs three years of each insider's history to separate routine from "
+        "opportunistic traders; free filings start in 2008, so it can only be tested from 2011.",
+        "The sector-ETF lead's status comes from the 49-industry test since 1963; the test on today's ETFs "
+        "since 2007 is shown as a check.",
     ]
     return out

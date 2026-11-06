@@ -75,12 +75,15 @@ def test_full_pipeline(patched):
     reg = json.loads((out / "regime.json").read_text())
     assert reg["regime"]["label"] in ("Calm", "Stretched", "Fragile")
     lb = json.loads((out / "leads_backtest.json").read_text())
-    assert set(lb["leads"]) == {"mispricing", "resid_mom", "insider_cluster", "earnings_reaction", "abnormal_volume"}
+    assert set(lb["leads"]) == {"mispricing", "resid_mom", "insider_buying", "earnings_reaction", "abnormal_volume"}
+    assert lb["etf_lead"]["status"] in ("Validated", "Promising", "Unproven") and "residual" in lb["etf_lead"]["etfs"]
     assert lb["industry_residual_momentum"]["residual"]["full"]["n"] > 100
     assert all(v["status"] in ("Validated", "Promising", "Unproven") for v in lb["leads"].values())
     ld = json.loads((out / "leads.json").read_text())
     assert ld["universe"] > 50 and set(ld["leads"]) == set(lb["leads"])
     assert any(v["bull"] for v in ld["leads"].values())
+    assert ld["etf_lead"]["eligible"] >= 10 and sum(r["flag"] for r in ld["etf_lead"]["rows"]) == ld["etf_lead"]["top"]
+    assert all("counts" in v for v in ld["leads"].values())
     st = json.loads((out / "stocks.json").read_text())
     assert len(st["rows"]) > 100
     # intraday run on top of the nightly state

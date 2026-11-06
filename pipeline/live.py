@@ -167,25 +167,27 @@ def build_leads(cfg, f, cache, out, df, panels, insiders):
              "v": None if pd.isna(v) else float(v), "p": float((col <= v).mean()) if len(col) and pd.notna(v) else None,
              "px": None if pd.isna(df.at[tk, "price"]) else float(df.at[tk, "price"]),
              "mc": None if pd.isna(df.at[tk, "mcap"]) else float(df.at[tk, "mcap"])}
-        if k == "insider_cluster":
-            r["value"] = None if pd.isna(L.at[tk, "insider_value"]) else float(L.at[tk, "insider_value"])
         if k == "earnings_reaction" and pd.notna(L.at[tk, "release"]):
             r["release"] = pd.Timestamp(L.at[tk, "release"]).strftime("%Y-%m-%d")
         if k == "abnormal_volume":
             r["ret_5d"] = None if pd.isna(L.at[tk, "ret_5d"]) else float(L.at[tk, "ret_5d"])
         return r
 
-    payload = {"generated": utcnow(), "asof": asof, "universe": int(liq.sum()), "leads": {}, "convergence": []}
+    payload = {"generated": utcnow(), "asof": asof, "universe": int(liq.sum()), "leads": {}, "convergence": [],
+               "convergence_rule": "Counts only indicators whose flagged names beat the universe before costs over the full backtest."}
     hits: dict[str, list[str]] = {}
     for k, meta in ld.LEADS.items():
         fl = F.get(k, {"bull": pd.Index([]), "bear": pd.Index([])})
         bull = L.loc[fl["bull"], k].sort_values(ascending=False)
         bear = L.loc[fl["bear"], k].sort_values() if len(fl["bear"]) else pd.Series(dtype=float)
-        for tk in bull.index:
-            hits.setdefault(tk, []).append(k)
         e = ev.get(k, {})
+        full = ((e.get("flagged_minus_universe") or {}).get("full") or {})
+        counts = not (isinstance(full.get("ann_mean"), (int, float)) and full["ann_mean"] <= 0)
+        if counts:
+            for tk in bull.index:
+                hits.setdefault(tk, []).append(k)
         payload["leads"][k] = {
-            **meta, "status": e.get("status", "Not yet tested"), "reason": e.get("reason", "The weekly backtest has not run yet."),
+            **meta, "counts": counts, "status": e.get("status", "Not yet tested"), "reason": e.get("reason", "The weekly backtest has not run yet."),
             "coverage": float(L.loc[liq[liq].index, k].notna().mean()) if k in L else 0.0,
             "n_bull": int(len(bull)), "n_bear": int(len(bear)),
             "bull": [row(tk, k) for tk in bull.index[:n]], "bear": [row(tk, k) for tk in bear.index[:n]],
@@ -193,6 +195,22 @@ def build_leads(cfg, f, cache, out, df, panels, insiders):
     conv = sorted(((tk, ks) for tk, ks in hits.items() if len(ks) >= 2), key=lambda x: -len(x[1]))
     payload["convergence"] = [{"t": tk, "n": df.at[tk, "name"] if "name" in df else "", "s": df.at[tk, "sector"] if "sector" in df else "",
                                "leads": ks} for tk, ks in conv[:40]]
+    # sector / industry ETFs ranked by residual momentum
+    eb = (_read(out, "leads_backtest.json") or {}).get("etf_lead", {})
+    etfs = ld.etf_universe(cfg)
+    em = ld.etf_monthly(ret_d, etfs, asof)
+    erm = ld.residual_momentum(em, factors, asof, lc["residual_momentum"]["window_months"],
+                               lc["residual_momentum"]["formation_months"], lc["residual_momentum"]["skip_months"]).dropna()
+    r12 = (1 + em.iloc[-13:-1]).prod() - 1 if len(em) > 13 else pd.Series(dtype=float)
+    ranked = erm.sort_values(ascending=False)
+    top = int(lc["etf"]["top"])
+    payload["etf_lead"] = {
+        **ld.ETF_LEAD, "status": eb.get("status", "Not yet tested"), "reason": eb.get("reason", "The weekly backtest has not run yet."),
+        "eligible": int(len(ranked)), "top": top,
+        "rows": [{"t": tk, "n": cfg["etfs"]["list"][tk]["name"], "kind": cfg["etfs"]["list"][tk]["kind"], "v": float(v),
+                  "rank": i + 1, "ret_12m": None if tk not in r12 or pd.isna(r12[tk]) else float(r12[tk]), "flag": i < top}
+                 for i, (tk, v) in enumerate(ranked.items())],
+    }
     write_json(out / "leads.json", payload)
     return payload
 

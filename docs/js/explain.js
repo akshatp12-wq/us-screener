@@ -556,17 +556,43 @@
       },
       refs: ["Blitz, Huij & Martens (2011), Residual Momentum, Journal of Empirical Finance", "Grundy & Martin (2001), Understanding the Nature of the Risks and the Source of the Rewards to Momentum Investing, Review of Financial Studies"],
     };
-    M.insider_cluster = {
-      title: "Insider cluster buying",
-      short: "Two or more different insiders (officers or directors) buying the company's stock on the open market within 60 days.",
-      now: (ctx) => leadNow("insider_cluster", ctx,
-        "Counts distinct insiders whose open-market purchases exceeded their sales over the last 60 days, using SEC Form 4 filings available by today. Two or more is flagged. Insiders sell for many reasons (taxes, diversification, planned sales), but they generally buy for one: they think the stock is cheap.",
-        (r) => `<b>${esc(r.t)}: ${H.isNum(r.v) ? r.v.toFixed(0) : "–"} insiders bought in the last 60 days</b>, about ${H.isNum(r.value) ? "$" + (r.value >= 1e6 ? (r.value / 1e6).toFixed(1) + "M" : (r.value / 1e3).toFixed(0) + "K") : "–"} in total. Read the Form 4s: purchases by the CEO or CFO, with their own money, at size relative to their pay, carry the most information.`),
-      use: "One of the most direct lead indicators available. Check who bought, how much, and whether it was a planned or discretionary purchase.",
-      origin: P("Insider purchases have predicted returns in many studies (Seyhun 1986; Lakonishok & Lee 2001), while sales carry much less information. Cohen, Malloy and Pomorski (2012) showed the signal comes from opportunistic trades rather than routine ones. Requiring several insiders to buy at once is a common refinement; this tool tests it directly rather than assuming it adds value."),
-      held: P("Insider-purchase signals have survived for decades, though their returns concentrate in smaller companies, and S&P 1500 stocks have relatively few open-market purchases."),
-      ours: () => evid("insider_cluster"),
+    M.insider_buying = {
+      title: "Opportunistic insider buying",
+      short: "More company insiders making opportunistic purchases than sales over the last six months, ignoring insiders who trade on a fixed yearly pattern.",
+      now: (ctx) => leadNow("insider_buying", ctx,
+        "Each insider with three years of filing history is classed as routine (trades in the same calendar month every year, often for pay or tax reasons) or opportunistic. Routine traders are ignored. For each company the tool counts opportunistic insiders who were net buyers over the last 180 days minus those who were net sellers. A count of +1 or more is flagged.",
+        (r) => `<b>${esc(r.t)}: ${H.isNum(r.v) ? "+" + r.v.toFixed(0) : "–"} net opportunistic insiders buying</b> over the last six months. Read the Form 4 filings: purchases by the CEO or CFO with their own money, at a size that matters relative to their pay, carry the most information.`),
+      use: "The best-evidenced stock lead in this tool. Check who bought, how much, and at what price.",
+      origin: P("Insider purchases have predicted returns in many studies (Seyhun 1986; Lakonishok & Lee 2001), while sales carry much less information. Cohen, Malloy and Pomorski (2012) showed that the information sits in opportunistic trades: routine insiders, who trade in the same month every year, carry no signal, while opportunistic insiders' trades predict significant abnormal returns. This lead follows their classification."),
+      held: P("Insider-purchase signals have survived for decades, though their returns are larger in smaller companies. The classification needs three years of each insider's history and free SEC filings start in 2008, so this tool can only test it from 2011 on. A simpler 'two or more insiders buying' rule was tested first and showed no edge, which is why it was replaced."),
+      ours: () => {
+        const sb = ((D().stock_backtest || {}).signals || {}).insiders;
+        return evid("insider_buying") + (sb && sb.top30_minus_bottom30 ? P(`Separate test of the same signal as a sector-relative score (stock-level backtest since 2011): top 30% minus bottom 30% earned ${spct(sb.top30_minus_bottom30.ann_mean)} a year (t = ${num(sb.t_nw, 1)}).`) : "");
+      },
       refs: ["Cohen, Malloy & Pomorski (2012), Decoding Inside Information, Journal of Finance", "Lakonishok & Lee (2001), Are Insider Trades Informative?, Review of Financial Studies", "Seyhun (1986), Insiders' Profits, Costs of Trading, and Market Efficiency, Journal of Financial Economics"],
+    };
+    M.etf_resid_mom = {
+      title: "Sector ETF residual momentum",
+      short: "Sector and industry ETFs ranked by their past-year return after removing what the market, size and value factors explain.",
+      now(ctx) {
+        const e = LD().etf_lead || {}, rows = e.rows || [];
+        const r = ctx && rows.find((x) => x.t === ctx);
+        const gen = P(`Each month, 36 months of each ETF's returns are regressed on the market, size and value factors; the ETF's stock-specific (here, industry-specific) returns from 12 months ago to last month are added up and divided by their volatility. The top ${e.top || 8} of ${e.eligible || "the"} eligible sector and industry ETFs are flagged.`);
+        if (!r) return gen + P(`Status: <b>${esc(((D().leads_backtest || {}).etf_lead || {}).status || e.status || "not yet tested")}</b>.`);
+        return P(`<b>${esc(r.t)} (${esc(r.n)}): rank ${r.rank} of ${rows.length}, residual momentum ${num(r.v, 2)}.</b> Its 12-month return (skipping the latest month) was ${spct(r.ret_12m)}. ${r.flag ? "It is in the flagged group: its industry has been outperforming for reasons beyond broad market, size and value moves." : "It is outside the flagged group."}`) +
+          P("Check the bubble watch too: a strong trend in an industry that has run far ahead of the market carries higher crash risk.");
+      },
+      use: "A way to tilt sector exposure toward industries with persistent, industry-specific strength. Rebalance monthly; expect choppy results in sharp market reversals.",
+      origin: P("Moskowitz and Grinblatt (1999) found that industry momentum explains much of individual stock momentum. Blitz, Huij and Martens (2011) showed that ranking on residual returns, after removing factor exposures, gives steadier results with smaller crashes than ranking on total returns."),
+      held: P("Industry momentum is one of the better-documented effects, but trading costs and sharp reversals (2009) reduce it. The status here comes from a survivorship-free test on Ken French's 49 industries since 1963; the test on today's ETFs only goes back to 2007 and leaves out funds that closed."),
+      ours: () => {
+        const eb = (D().leads_backtest || {}).etf_lead || {}, ind = eb.industry || {}, et = eb.etfs || {};
+        const per = (x) => !x || !x.n ? "no data" : x.n < 24 ? `only ${x.n} months` : `${spct(x.ann_mean)} a year (t = ${num(x.t, 1)}, ${x.n} months)`;
+        return P(`<b>Status: ${esc(eb.status || "not yet tested")}.</b> ${esc(eb.reason || "")}.`) +
+          (ind.residual ? P(`49 industries, top 10 vs all: residual momentum ${per(ind.residual.pre)} before 2011 and ${per(ind.residual.post)} after; raw momentum ${per(ind.raw && ind.raw.pre)} and ${per(ind.raw && ind.raw.post)}. Worst month ${spct(ind.residual_worst_month)} vs ${spct(ind.raw_worst_month)} for raw momentum.`) : "") +
+          (et.residual ? P(`Today's ETFs since 2007, top ${(LD().etf_lead || {}).top || 8} vs all eligible: residual momentum ${per(et.residual.full)}; raw momentum ${per(et.raw && et.raw.full)}. All figures before costs.`) : "");
+      },
+      refs: ["Blitz, Huij & Martens (2011), Residual Momentum, Journal of Empirical Finance", "Moskowitz & Grinblatt (1999), Do Industries Explain Momentum?, Journal of Finance"],
     };
     M.earnings_reaction = {
       title: "Earnings reaction",
@@ -592,16 +618,16 @@
       ours: () => evid("abnormal_volume"),
       refs: ["Gervais, Kaniel & Mingelgrin (2001), The High-Volume Return Premium, Journal of Finance", "Kaniel, Ozoguz & Starks (2012), The High Volume Return Premium: Cross-Country Evidence, Journal of Financial Economics"],
     };
-    M.leads_overview = mE("Lead indicators", "Five signals that flag individual stocks worth researching, each with its own backtest.",
-      "The page lists today's flagged names for each indicator, the stocks flagged by two or more, and the evidence behind each indicator. Nothing here changes the strategy scores; an indicator would only be considered for the scores after it reaches Validated.",
+    M.leads_overview = mE("Lead indicators", "Five stock signals and one sector-ETF signal that flag names worth researching, each with its own backtest.",
+      "The page lists today's flagged names for each indicator, the sector ETFs ranked by residual momentum, the stocks flagged by two or more indicators, and the evidence behind each indicator. Nothing here changes the strategy scores; an indicator would only be considered for the scores after it reaches Validated.",
       "Start with names flagged by two or more indicators, then read the filings: insider Form 4s, the earnings release, the balance sheet. The flags find candidates; the research decides.",
       "The indicators come from published research (see each one). The status labels come from this tool's own monthly backtests, split at 2011 where the data allow.");
     M.lead_status = mE("Status labels", "How much evidence each indicator has in this tool's own backtest.",
       "<b>Validated</b>: flagged stocks beat the liquid universe with t ≥ 3 over the full period, and did so both before and after 2011. <b>Promising</b>: t ≥ 2 and positive in both periods (or only post-2011 data exists). <b>Unproven</b>: everything else, including indicators that worked in reverse.",
-      "A t of 3 is a deliberately high bar: with many indicators tested, a t of 2 is easy to reach by luck (Harvey, Liu & Zhu 2016). Free data starts in 2004 (prices), 2008 (insider filings), 2009 (earnings releases) and about 2010 (fundamentals), so some indicators have little or no pre-2011 history.",
+      "A t of 3 is a deliberately high bar: with many indicators tested, a t of 2 is easy to reach by luck (Harvey, Liu & Zhu 2016). Free data starts in 2004 (prices), 2008 (insider filings), 2009 (earnings releases) and about 2010 (fundamentals), so some indicators have little or no pre-2011 history. Opportunistic insider buying needs three years of each insider's history, so it starts in 2011. The sector-ETF lead is judged on Ken French's 49 industries since 1963.",
       "Out-of-sample testing and higher t-stat thresholds guard against data mining.", ["Harvey, Liu & Zhu (2016), …and the Cross-Section of Expected Returns, Review of Financial Studies"]);
-    M.convergence = mE("Flagged by two or more", "Stocks that appear on at least two bullish lead lists today.",
-      "Independent signals pointing the same way are more informative than any single one, as long as they measure different things (for example insider buying plus a cheap fundamental value).",
+    M.convergence = mE("Flagged by two or more", "Stocks that appear on at least two bullish lead lists today, counting only indicators with a positive record.",
+      "Independent signals pointing the same way are more informative than any single one, as long as they measure different things (for example insider buying plus a cheap fundamental value). An indicator counts only if its flagged names beat the universe before costs over its full backtest; indicators with a negative record (for example abnormal volume) are left out.",
       "The best place to start research.", "Combining weakly correlated signals improves reliability; this is the logic of multi-factor models.");
 
     return M;
