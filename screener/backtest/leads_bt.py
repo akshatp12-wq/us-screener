@@ -21,7 +21,8 @@ from ..signals.leads import (ETF_LEAD, LEADS, compute_leads, earnings_reactions,
                              ff3_monthly, flags, residual_momentum)
 from ..signals.stock import compute_stock_signals, first_trade_dates, momentum_12_1
 from ..util import ann_stats
-from .metrics import newey_west_t
+from ..scoring.composite import signal_scores
+from .metrics import newey_west_t, ols
 
 log = logging.getLogger("screener.backtest")
 
@@ -115,9 +116,48 @@ def etf_residual_momentum(ret_d: pd.DataFrame, cfg: dict, ff3: pd.DataFrame | No
                     "equal-weighted, next month. Short history and today's ETF list only; gross of costs."}
 
 
+FACTOR_NAMES = {"Mkt-RF": "market", "SMB": "size", "HML": "value", "RMW": "profitability", "CMA": "investment",
+                "Mom": "momentum"}
+
+
+def factor_attribution(y: pd.Series, ff5: pd.DataFrame | None, mom: pd.Series | None, ff3: pd.DataFrame | None = None) -> dict:
+    """Regress a monthly long-minus-universe series on Fama-French five factors plus momentum. Alpha is the
+    return left after known factor exposures (annualised, Newey-West t)."""
+    base = ff5 if ff5 is not None else ff3
+    if base is None or y is None or len(y.dropna()) < 36:
+        return {"status": "unavailable"}
+    X = base[[c for c in ("Mkt-RF", "SMB", "HML", "RMW", "CMA") if c in base]].copy()
+    if mom is not None:
+        X["Mom"] = mom
+    X.index = X.index + pd.offsets.MonthEnd(0)
+    res = ols(y, X)
+    if "coef" not in res:
+        return {"status": "unavailable", "n": res.get("n")}
+    return {"n": res["n"], "alpha_ann": res["coef"]["const"] * 12, "alpha_t": res["t"]["const"], "r2": res["r2"],
+            "raw_ann": float(y.dropna().mean() * 12),
+            "loadings": {FACTOR_NAMES.get(k, k): {"beta": v, "t": res["t"][k]} for k, v in res["coef"].items() if k != "const"}}
+
+
+def _summarise_diag(rows: list[dict], split: pd.Timestamp) -> dict:
+    if not rows:
+        return {"status": "unavailable"}
+    d = pd.DataFrame(rows).set_index("date").sort_index()
+    out = {"months": int(len(d)), "start": d.index[0].strftime("%Y-%m"), "returns": {}, "composition": {}, "counts": {}}
+    for c in ("spread", "spread_demeaned", "buyers", "sellers", "neutral", "buyers_minus_sellers",
+              "buyers_minus_sellers_sector_neutral", "top_neutral_minus_bottom", "top_buyers_minus_bottom"):
+        if c in d:
+            out["returns"][c] = _period_stats(d[c], split)
+    for c in d.columns:
+        if c.startswith("top_share") or c.startswith("bot_share"):
+            out["composition"][c] = float(d[c].mean())
+        if c.startswith("n_"):
+            out["counts"][c] = float(d[c].mean())
+    return out
+
+
 def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dict, insiders: pd.DataFrame | None = None,
                        releases: dict | None = None, ff3: pd.DataFrame | None = None, ind49: pd.DataFrame | None = None,
-                       bench: str = "SPY") -> dict:
+                       bench: str = "SPY", ff5: pd.DataFrame | None = None, mom: pd.Series | None = None) -> dict:
     lc = cfg["leads"]
     split = pd.Timestamp(lc["status"]["split"])
     cost = float(lc["cost_round_trip"])
@@ -139,6 +179,7 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
     blank_vb = pd.DataFrame(np.nan, index=tickers, columns=["vol", "beta"])
 
     rec = {k: {"fx": [], "bear": [], "spread": [], "ic": [], "n": [], "new": []} for k in LEADS}
+    idiag: list[dict] = []
     prev = {k: set() for k in LEADS}
     for t in dates:
         i = ret_m.index.searchsorted(t, side="right")
@@ -157,6 +198,10 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         F = flags(L, liq, cfg)
         uni = nxt.reindex(df.index[liq])
         um = float(uni.mean())
+        if "insider_buying" in L and L["insider_buying"].notna().sum() > 100:
+            idiag_row = _insider_diag(df, L, liq, nxt, cfg, nd)
+            if idiag_row:
+                idiag.append(idiag_row)
         for k in LEADS:
             s = L.loc[liq[liq].index, k].dropna() if k in L else pd.Series(dtype=float)
             r = nxt.reindex(s.index)
@@ -194,8 +239,10 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         res = {"label": meta["label"], **st, "flagged_minus_universe": p, "net_of_costs": _period_stats(net, split),
                "avg_flagged": float(ser(rec[k]["n"]).mean()), "avg_new_share": float(new.mean()) if len(new) else None,
                "first_month": fx.index[0].strftime("%Y-%m")}
+        res["attribution"] = factor_attribution(fx, ff5, mom, ff3)
         if rec[k]["bear"]:
             bs = ser(rec[k]["bear"])
+            res["bear_attribution"] = factor_attribution(bs, ff5, mom, ff3)
             res["bearish_minus_universe"] = _period_stats(bs, split)
             # bearish side "works" when its names lag the universe: judge it on the negated series
             bst = lead_status(_period_stats(-bs, split), cfg)
@@ -210,6 +257,7 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         curve = (1 + fx).cumprod()
         res["curve"] = [[d.strftime("%Y-%m"), round(float(v), 4)] for d, v in curve.items()]
         out["leads"][k] = res
+    out["insider_diagnostic"] = _summarise_diag(idiag, split)
     ind = industry_residual_momentum(ind49, ff3, split)
     out["industry_residual_momentum"] = ind
     etf_lead = {"label": ETF_LEAD["label"], "industry": ind, "etfs": etf_residual_momentum(ret_d, cfg, ff3, split)}
@@ -234,3 +282,37 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         "since 2007 is shown as a check.",
     ]
     return out
+
+
+def _insider_diag(df: pd.DataFrame, L: pd.DataFrame, liq: pd.Series, nxt: pd.Series, cfg: dict, nd) -> dict | None:
+    """One month of the insider ranking-vs-flags diagnosis: the sector-percentile spread used by the
+    stock-level backtest, rebuilt alongside explicit buyer / neutral / seller groups."""
+    d2 = df.copy()
+    d2["insider_net"] = L["insider_buying"]
+    x = signal_scores(d2, cfg)["insiders"]
+    li = liq[liq].index
+    net, xx, r = L.loc[li, "insider_buying"], x.reindex(li), nxt.reindex(li)
+    sec = df.loc[li, "sector"].fillna("Unknown") if "sector" in df else pd.Series("All", index=li)
+    ok = net.notna() & xx.notna() & r.notna()
+    net, xx, r, sec = net[ok], xx[ok], r[ok], sec[ok]
+    if len(r) < 100:
+        return None
+    um = r.mean()
+    top, bot = xx >= 0.7, xx <= 0.3
+    buy, sell, zero = net > 0, net < 0, net == 0
+    rd = r - r.groupby(sec).transform("mean")
+    bs = [r[buy & (sec == g)].mean() - r[sell & (sec == g)].mean() for g in sec.unique()
+          if (buy & (sec == g)).any() and (sell & (sec == g)).any()]
+    mean = lambda m: float(r[m].mean()) if m.sum() >= 3 else np.nan  # noqa: E731
+    return {
+        "date": nd,
+        "spread": mean(top) - mean(bot), "spread_demeaned": float(rd[top].mean() - rd[bot].mean()) if top.any() and bot.any() else np.nan,
+        "buyers": mean(buy) - um, "sellers": mean(sell) - um, "neutral": mean(zero) - um,
+        "buyers_minus_sellers": mean(buy) - mean(sell),
+        "buyers_minus_sellers_sector_neutral": float(np.mean(bs)) if bs else np.nan,
+        "top_neutral_minus_bottom": mean(top & zero) - mean(bot) if (top & zero).sum() >= 5 else np.nan,
+        "top_buyers_minus_bottom": mean(top & buy) - mean(bot) if (top & buy).sum() >= 3 else np.nan,
+        "top_share_buyers": float(buy[top].mean()), "top_share_neutral": float(zero[top].mean()), "top_share_sellers": float(sell[top].mean()),
+        "bot_share_buyers": float(buy[bot].mean()), "bot_share_neutral": float(zero[bot].mean()), "bot_share_sellers": float(sell[bot].mean()),
+        "n_top": int(top.sum()), "n_bot": int(bot.sum()), "n_buy": int(buy.sum()), "n_sell": int(sell.sum()), "n_zero": int(zero.sum()),
+    }

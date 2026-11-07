@@ -539,3 +539,18 @@ def test_insider_bearish_side_and_selling_dates():
     ins["trans_date"], ins["filed"] = pd.to_datetime(ins["trans_date"]), pd.to_datetime(ins["filed"])
     assert insider_signal_dates(ins, pd.Timestamp("2024-06-28"), [1], 180, 1, -1)[1] == pd.Timestamp("2024-05-03")
     assert 1 not in insider_signal_dates(ins, pd.Timestamp("2024-06-28"), [1], 180, 1, 1)
+
+
+def test_factor_attribution_recovers_loadings_and_alpha():
+    from screener.backtest.leads_bt import factor_attribution
+    rng = np.random.default_rng(5)
+    idx = pd.date_range("2011-01-01", periods=180, freq="MS")
+    ff5 = pd.DataFrame({c: rng.normal(0.005, 0.03, 180) for c in ("Mkt-RF", "SMB", "HML", "RMW", "CMA")}, index=idx)
+    mom = pd.Series(rng.normal(0.005, 0.04, 180), index=idx)
+    y = (-0.8 * ff5["HML"] + 0.5 * mom + rng.normal(0, 0.002, 180))   # pure factor exposure, no alpha
+    y.index = idx + pd.offsets.MonthEnd(0)
+    a = factor_attribution(y, ff5, mom)
+    assert abs(a["loadings"]["value"]["beta"] + 0.8) < 0.05 and abs(a["loadings"]["momentum"]["beta"] - 0.5) < 0.05
+    assert abs(a["alpha_ann"]) < 0.01
+    a2 = factor_attribution(y + 0.004, ff5, mom)                       # add 0.4% a month of true alpha
+    assert abs(a2["alpha_ann"] - 0.048) < 0.01 and a2["alpha_t"] > 3

@@ -86,7 +86,8 @@ def leads_stage(cfg, f, cache, panels, bundle, inputs):
         return {"status": "unavailable", "reason": "universe unavailable"}
     rel = ms.safe(sec.load_earnings_releases, f, cfg, cache, univ["cik"].dropna().astype(int).tolist(),
                   source="SEC earnings releases (8-K 2.02)")
-    return run_leads_backtest(univ, panels, derived or {}, cfg, insiders, rel, bundle.get("ff3"), bundle.get("ind49"))
+    return run_leads_backtest(univ, panels, derived or {}, cfg, insiders, rel, bundle.get("ff3"), bundle.get("ind49"),
+                              ff5=bundle.get("ff5"), mom=bundle.get("mom"))
 
 
 @stage("crash replay and buy timing")
