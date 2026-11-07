@@ -17,6 +17,7 @@ import pandas as pd
 
 from ..data.sec import snapshot
 from ..portfolio.construct import liquid_mask
+from ..signals.leads import insider_last_trade
 from ..signals.leads import (ETF_LEAD, LEADS, compute_leads, earnings_reactions, etf_monthly, etf_universe,
                              ff3_monthly, flags, residual_momentum)
 from ..signals.stock import compute_stock_signals, first_trade_dates, momentum_12_1
@@ -180,6 +181,8 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
 
     rec = {k: {"fx": [], "bear": [], "spread": [], "ic": [], "n": [], "new": []} for k in LEADS}
     idiag: list[dict] = []
+    AGE_BUCKETS = [(0, 30), (31, 60), (61, 90), (91, 180)]
+    age_rec: dict = {b: [] for b in AGE_BUCKETS}
     prev = {k: set() for k in LEADS}
     for t in dates:
         i = ret_m.index.searchsorted(t, side="right")
@@ -215,6 +218,14 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
                 rec[k]["new"].append((nd, newshare))
                 prev[k] = set(bull)
             bear = F.get(k, {}).get("bear", pd.Index([]))
+            if k == "insider_buying" and len(bear) >= 10 and "cik" in df:
+                last = insider_last_trade(insiders, t, df.loc[bear, "cik"].tolist(), lc["insider_buying"]["window_days"], -1)
+                ages = pd.Series({tk: (t - last[int(df.at[tk, "cik"])]).days for tk in bear
+                                  if pd.notna(df.at[tk, "cik"]) and int(df.at[tk, "cik"]) in last})
+                for lo_, hi_ in AGE_BUCKETS:
+                    names = ages.index[(ages >= lo_) & (ages <= hi_)]
+                    if len(names) >= 5:
+                        age_rec[(lo_, hi_)].append((nd, float(nxt.reindex(names).mean() - um)))
             if len(bear) >= 10:
                 rec[k]["bear"].append((nd, float(nxt.reindex(bear).mean() - um)))
             if k != "insider_buying" and len(s) >= 100 and s.nunique() >= 10:
@@ -258,6 +269,9 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         res["curve"] = [[d.strftime("%Y-%m"), round(float(v), 4)] for d, v in curve.items()]
         out["leads"][k] = res
     out["insider_diagnostic"] = _summarise_diag(idiag, split)
+    out["insider_sell_decay"] = {f"{a}-{b} days": _period_stats(ser(v), split) for (a, b), v in age_rec.items()}
+    out["insider_sell_decay_note"] = ("Net opportunistic sellers' next-month return vs the liquid universe, grouped by days since "
+                                     "the most recent opportunistic sale filing. Negative = underperformed.")
     ind = industry_residual_momentum(ind49, ff3, split)
     out["industry_residual_momentum"] = ind
     etf_lead = {"label": ETF_LEAD["label"], "industry": ind, "etfs": etf_residual_momentum(ret_d, cfg, ff3, split)}

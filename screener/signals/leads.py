@@ -377,3 +377,21 @@ def month_end_streak(history: dict, key: str, ticker: str, month_ends: list) -> 
         else:
             break
     return since
+
+
+def insider_last_trade(ins: pd.DataFrame | None, asof, ciks, window_days: int = 180, direction: int = -1) -> dict:
+    """Per issuer CIK: filing date of the most recent opportunistic trade in `direction` (-1 = sale) within
+    the window. This is what renews a fresh insider flag."""
+    from .stock import classify_insiders
+    if ins is None or ins.empty:
+        return {}
+    asof = pd.Timestamp(asof)
+    want = set(int(c) for c in ciks if pd.notna(c))
+    x = ins[ins["issuer_cik"].isin(want)]
+    kinds = classify_insiders(x, asof)
+    opp = kinds[kinds["kind"] == "opportunistic"][["issuer_cik", "owner_cik"]]
+    rec = x[(x["filed"] <= asof) & (x["trans_date"] > asof - pd.Timedelta(days=window_days)) & (x["side"] == direction)]
+    rec = rec.merge(opp, on=["issuer_cik", "owner_cik"], how="inner")
+    if rec.empty:
+        return {}
+    return {int(k): pd.Timestamp(v) for k, v in rec.groupby("issuer_cik")["filed"].max().items()}

@@ -175,7 +175,17 @@ def build_leads(cfg, f, cache, out, df, panels, insiders, univ=None, derived=Non
             r["ret_5d"] = None if pd.isna(L.at[tk, "ret_5d"]) else float(L.at[tk, "ret_5d"])
         return r
 
+    last_sale = {}
+    if insiders is not None and "cik" in df:
+        names = list(F.get("insider_buying", {}).get("bear", []))
+        if names:
+            ls = ld.insider_last_trade(insiders, asof, df.loc[names, "cik"].tolist(), lc["insider_buying"]["window_days"], -1)
+            last_sale = {tk: ls[int(df.at[tk, "cik"])].strftime("%Y-%m-%d") for tk in names
+                         if pd.notna(df.at[tk, "cik"]) and int(df.at[tk, "cik"]) in ls}
+
     def with_since(r, k, side):
+        if k == "insider_buying" and side == "bear" and r["t"] in last_sale:
+            r["last_trade"] = last_sale[r["t"]]
         e = state["active"].get(f"{k}|{side}|{r['t']}")
         if e:
             r.update({"since": e["since"], "px_since": e.get("px"), "ret_since": e.get("ret"), "spy_since": e.get("spy"),
@@ -201,7 +211,7 @@ def build_leads(cfg, f, cache, out, df, panels, insiders, univ=None, derived=Non
             "coverage": float(L.loc[liq[liq].index, k].notna().mean()) if k in L else 0.0,
             "n_bull": int(len(bull)), "n_bear": int(len(bear)),
             "bull": [with_since(row(tk, k), k, "bull") for tk in bull.index[:n]],
-            "bear": [with_since(row(tk, k), k, "bear") for tk in bear.index[:n]],
+            "bear": [with_since(row(tk, k), k, "bear") for tk in (bear.index if k == "insider_buying" else bear.index[:n])],
             "live": live.get(k),
         }
     conv = sorted(((tk, ks) for tk, ks in hits.items() if len(ks) >= 2), key=lambda x: -len(x[1]))
@@ -209,6 +219,7 @@ def build_leads(cfg, f, cache, out, df, panels, insiders, univ=None, derived=Non
                                "leads": ks, "since": {k: (state["active"].get(f"{k}|bull|{tk}") or {}).get("since") for k in ks},
                                "px": None if pd.isna(df.at[tk, "price"]) else float(df.at[tk, "price"])} for tk, ks in conv[:40]]
     payload["tracking_started"] = state["started"]
+    payload["watchlist_rules"] = lc.get("watchlist", {})
     # sector / industry ETFs ranked by residual momentum
     eb = (_read(out, "leads_backtest.json") or {}).get("etf_lead", {})
     etfs = ld.etf_universe(cfg)

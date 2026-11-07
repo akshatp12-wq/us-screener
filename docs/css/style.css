@@ -277,3 +277,5 @@ th .th-sort:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px
 th[aria-sort="ascending"] .th-ind::after { content: " ▲"; font-size: 0.8em; }
 th[aria-sort="descending"] .th-ind::after { content: " ▼"; font-size: 0.8em; }
 th[aria-sort="ascending"], th[aria-sort="descending"] { color: var(--ink); }
+.evlinks { padding-left: 18px; } .evlinks li { margin: 6px 0; }
+details > summary { cursor: pointer; margin: 14px 0 6px; color: var(--ink-2); }

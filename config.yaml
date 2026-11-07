@@ -323,6 +323,12 @@ leads:
   earnings_reaction: {max_age_days: 75, live_max_age_days: 30}
   abnormal_volume: {recent_days: 5, base_days: 50}
   etf: {kinds: [sector, industry], top: 8}         # sector-ETF residual momentum list
+  # Watch list (Leads page): only indicators with evidence are admitted; flags expire after the window
+  # their evidence covers unless the signal fires again.
+  watchlist:
+    admit_status: [Validated, Promising]
+    admit_alpha_t: 2.0            # or factor-adjusted alpha t-stat this large, in the right direction
+    fresh_days: {insider_buying_bear: 90, default: 31}
   status: {validated_t: 3.0, promising_t: 2.0, min_pre_months: 24, split: "2011-01-01"}
 
 # ----------------------------------------------------------------------------- events

@@ -339,7 +339,8 @@
     return `<p class="empty">${esc(name)} hasn't been generated yet. It appears after the next scheduled run (see Data health).</p>`;
   }
   function modeSeg() {
-    return `<div class="seg" role="group" aria-label="Strategy mode">${Object.entries(MODES).map(([k, v]) =>
+    if (S.mode === "market_neutral") S.mode = "absolute_return";
+    return `<div class="seg" role="group" aria-label="Strategy mode">${Object.entries(MODES).filter(([k]) => k !== "market_neutral").map(([k, v]) =>
       `<button type="button" data-mode="${k}" aria-pressed="${S.mode === k}">${esc(v)}</button>`).join("")}</div>`;
   }
 
@@ -366,13 +367,14 @@
         <div><span>Above 10-month average</span><b>${bw.above_sma ? "Yes" : "No"}</b></div><div><span>VIX</span><b>${num(bw.vix, 1)}</b></div></div>
         <p class="small">Rule: ${esc(bw.rule)}. Capitulation flag: ${esc(bw.capitulation_rule)}. ${esc(bw.use)} ${info(bw.cite)}</p></section>`;
     }
-    const order = [["Drive the label and position sizing", ["credit_gap", "red_zone_business", "red_zone_household", "sentiment"]],
-      ["Context only (not used in the label)", ["cape", "yield_curve", "ebp", "vrp"]], ["Crash monitor", ["crash_guard"]]];
-    order.forEach(([title, keys]) => {
-      h += `<h2>${esc(title)}</h2><ul class="dials">`;
-      keys.forEach((k) => { const d = r.dials[k]; if (d) h += dialRow(d); });
-      h += `</ul>`;
-    });
+    h += `<h2>Warnings with a record</h2><p class="small">The credit dials and the bubble watch were the warnings that beat their base rates in the 1960–2026 crash replay.</p><ul class="dials">`;
+    ["credit_gap", "red_zone_business", "red_zone_household", "sentiment"].forEach((k) => { const d = r.dials[k]; if (d) h += dialRow(d); });
+    h += `</ul>`;
+    const bw2 = S.data.bubble;
+    if (bw2) h += `<p>${xb("bubble_watch", "Bubble watch")}: <b>${bw2.n_flagged ?? "–"} of ${bw2.n_valid ?? "–"}</b> sector and industry ETFs flagged (${pct(bw2.flagged_share, 0)}). <a href="#bubbles">See the list</a>.</p>`;
+    h += `<details><summary>Context dials (shown for reference, not used in any decision): valuation, yield curve, excess bond premium, variance risk premium, momentum crash guard</summary><ul class="dials">`;
+    ["cape", "yield_curve", "ebp", "vrp", "crash_guard"].forEach((k) => { const d = r.dials[k]; if (d) h += dialRow(d); });
+    h += `</ul></details>`;
     h += `<h2>Market trend</h2><p class="lede small">12-month excess return and price versus the 10-month average. ${info("Moskowitz, Ooi & Pedersen (2012), Time Series Momentum; Faber (2007)")}</p>
       <div class="table-wrap"><table><thead><tr><th>Asset</th><th>ETF</th><th class="num">12-month</th><th>Above 10-mo avg</th><th>Trend ${xi("trend", "market trend")}</th></tr></thead><tbody>` +
       Object.entries(r.trend || {}).map(([k, t]) => `<tr><td>${xb("trend", esc(k), k)}</td><td>${esc(t.symbol)}</td><td class="num ${cls(t.ret_12m)}">${spct(t.ret_12m)}</td><td>${t.above_10m_sma === undefined ? "–" : t.above_10m_sma ? "Yes" : "No"}</td><td>${st(t.status, t.signal ? t.signal[0].toUpperCase() + t.signal.slice(1) : "Unavailable")}</td></tr>`).join("") +
@@ -435,7 +437,7 @@
     const L = S.data.leads, B = (S.data.leads_backtest || {}).leads || {};
     if (!L || !L.leads) return unavailable("Lead indicators");
     const ind = (S.data.leads_backtest || {}).industry_residual_momentum;
-    let h = `<h1>Lead indicators</h1><p class="lede">Stocks and sector ETFs worth researching, flagged by signals with published support. Each one is backtested on its own; none of them changes the mode scores. A flag is a reason to look closer, not a buy signal. ${xb("leads_overview", "How to use this page", null, "xp-link")}</p>
+    let h = `<p class="small"><a href="#evidence">← Evidence</a></p><h1>Lead research</h1><p class="lede">Stocks and sector ETFs worth researching, flagged by signals with published support. Each one is backtested on its own; none of them changes the mode scores. A flag is a reason to look closer, not a buy signal. ${xb("leads_overview", "How to use this page", null, "xp-link")}</p>
       <p class="small">As of ${esc(L.asof)} · ${L.universe} liquid stocks (S&P 1500, $5M+/day, price above $5).</p>
       <h2>${xb("lead_status", "Evidence")}</h2>
       <div class="table-wrap"><table><thead><tr><th>Indicator</th><th>Status</th><th class="num">Flagged now</th><th class="num">Before 2011, vs universe / yr</th><th class="num">2011 on</th><th class="num">Full period, net of costs</th><th class="num">Since</th><th>In 2+ list ${xi("convergence", "two-plus list")}</th></tr></thead><tbody>` +
@@ -474,6 +476,116 @@
         h += `<details${k === "insider_buying" ? " open" : ""}><summary>Bearish side: ${x.n_bear} ${label} · ${leadStatus(bb.status || x.bear_status)} ${isNum(bm.ann_mean) ? `<span class="small">${spct(bm.ann_mean)} a year vs universe, t ${num(bm.t, 1)}</span>` : ""}</summary>${table(x.bear, "Bearish")}</details>`;
       }
     });
+    return h;
+  }
+
+  // ------------------------------------------------------------------ watch list (Leads tab)
+  const DAY = 86400000;
+  function watchRules() {
+    const L = S.data.leads || {};
+    return Object.assign({ admit_status: ["Validated", "Promising"], admit_alpha_t: 2, fresh_days: { insider_buying_bear: 90, default: 31 } }, L.watchlist_rules || {});
+  }
+  function admittedLeads() {
+    const L = S.data.leads || {}, B = (S.data.leads_backtest || {}).leads || {}, R = watchRules(), out = [];
+    LEAD_ORDER.forEach((k) => ["bull", "bear"].forEach((side) => {
+      const b = B[k] || {}, x = (L.leads || {})[k];
+      if (!x) return;
+      const st = side === "bull" ? b.status : (b.bear_status || {}).status;
+      const at = side === "bull" ? b.attribution : b.bear_attribution;
+      const okS = R.admit_status.includes(st);
+      const okA = at && isNum(at.alpha_t) && (side === "bull" ? at.alpha_t >= R.admit_alpha_t : at.alpha_t <= -R.admit_alpha_t);
+      if (okS || okA) out.push({ k, side, label: x.label, why: okS ? `Backtest status: ${st}` : `After market, size, value, profitability, investment and momentum: ${side === "bull" ? "+" : ""}${(at.alpha_ann * 100).toFixed(1)}% a year (t ${at.alpha_t.toFixed(1)})` });
+    }));
+    return out;
+  }
+  function freshRows(k, side) {
+    const L = S.data.leads, R = watchRules(), asof = new Date((L.asof || "").slice(0, 10) + "T12:00:00");
+    const win = (R.fresh_days || {})[`${k}_${side}`] || (R.fresh_days || {}).default || 31;
+    return ((L.leads[k] || {})[side] || []).map((r) => {
+      const anchor = r.last_trade || r.since;
+      const age = anchor ? Math.round((asof - new Date(anchor + "T12:00:00")) / DAY) : null;
+      return Object.assign({}, r, { anchor, age, left: isNum(age) ? win - age : null, win });
+    }).filter((r) => isNum(r.left) && r.left >= 0);
+  }
+  function pageWatch() {
+    const L = S.data.leads;
+    if (!L || !L.leads) return unavailable("Watch list");
+    const eb = (S.data.leads_backtest || {}).etf_lead || {}, R = watchRules();
+    const adm = admittedLeads(), etfOk = R.admit_status.includes(eb.status || (L.etf_lead || {}).status);
+    let h = `<h1>Watch list</h1><p class="lede">Stocks and ETFs flagged by signals that held up in testing, while the signal is still fresh. A name leaves the list when its signal expires. This is a list to research, not a buy or sell recommendation. ${xb("watch_rules", "How names get on this list", null, "xp-link")}</p>
+      <p class="small">As of ${esc(L.asof)}. Signals that qualify today: ${[etfOk ? "sector-ETF residual momentum" : null, ...adm.map((a) => a.k === "insider_buying" && a.side === "bear" ? "net opportunistic insider selling (weakness)" : (a.side === "bear" ? "bearish: " : "") + a.label)].filter(Boolean).map(esc).join("; ") || "none"}. Everything else is on the <a href="#evidence">Evidence</a> tab.</p>`;
+    // strength: ETFs
+    h += `<h2>Watch for strength</h2>`;
+    const et = L.etf_lead;
+    if (etfOk && et && et.rows) {
+      const rows = et.rows.filter((r) => r.flag);
+      h += `<p class="small">${xb("etf_resid_mom", "Sector ETF residual momentum")} ${leadStatus(eb.status)} · top ${et.top} of ${et.eligible} sector and industry ETFs, re-ranked monthly. Evidence: 49 US industries since 1963, positive before and after 2011.</p>
+        <div class="table-wrap"><table><thead><tr><th>Rank</th><th>ETF</th><th>Type</th><th class="num">Residual momentum</th><th class="num">12–1 month return</th></tr></thead><tbody>` +
+        rows.map((r) => `<tr><td class="num">${r.rank}</td><td>${xb("etf_resid_mom", `<span class="tk">${esc(r.t)}</span>`, r.t)}<span class="nm">${esc(r.n)}</span></td><td class="small">${esc(r.kind)}</td><td class="num">${num(r.v, 2)}</td><td class="num ${cls(r.ret_12m)}">${spct(r.ret_12m)}</td></tr>`).join("") + `</tbody></table></div>`;
+    }
+    adm.filter((a) => a.side === "bull").forEach((a) => { h += watchTable(a); });
+    if (!adm.some((a) => a.side === "bull")) h += `<p class="small">No stock-level buy signal has passed testing yet, so there is no stock strength list. Candidates are tracked on the <a href="#leadlab">lead research</a> page.</p>`;
+    // weakness
+    h += `<h2>Watch for weakness</h2>`;
+    const bears = adm.filter((a) => a.side === "bear");
+    bears.forEach((a) => { h += watchTable(a); });
+    if (!bears.length) h += `<p class="empty">No bearish signal qualifies today.</p>`;
+    // screen
+    const sd = S.data.stocks;
+    if (sd && sd.rows) {
+      const weak = new Set(bears.flatMap((a) => freshRows(a.k, "bear").map((r) => r.t)));
+      const rows = sd.rows.filter((r) => !(r.fl || []).includes("illiquid") && isNum(r.f.value) && isNum(r.f.profitability))
+        .map((r) => Object.assign({ vp: (r.f.value + r.f.profitability) / 2 }, r)).sort((a, b) => b.vp - a.vp).slice(0, 25);
+      h += `<h2>${xb("screen_vp", "Screen: cheap and profitable")}</h2><p class="small">Not a proven signal: value and profitability have long-run research support but did not beat the market at the stock level here since 2011. Shown as a starting point for valuation work. Names with fresh insider selling are marked.</p>
+        <div class="table-wrap"><table><thead><tr><th>Stock</th><th>Sector</th><th class="num">Value</th><th class="num">Profitability</th><th class="num">Price</th><th>Warning</th></tr></thead><tbody>` +
+        rows.map((r) => `<tr><td><span class="tk">${esc(r.t)}</span><span class="nm">${esc(r.n)}</span></td><td class="small">${esc(r.s)}</td><td class="num">${pct(r.f.value, 0)}</td><td class="num">${pct(r.f.profitability, 0)}</td><td class="num">${isNum(r.px) ? "$" + r.px.toFixed(2) : "–"}</td><td class="small">${weak.has(r.t) ? st("red", "Insider selling") : ""}</td></tr>`).join("") + `</tbody></table></div>`;
+    }
+    return h;
+  }
+  function watchTable(a) {
+    const rows = freshRows(a.k, a.side).sort((x, y) => (a.side === "bear" ? (x.v - y.v) : (y.v - x.v)) || (x.age - y.age));
+    const rel = rows.filter((r) => isNum(r.ret_since) && isNum(r.spy_since));
+    const avg = rel.length ? rel.reduce((s2, r) => s2 + r.ret_since - r.spy_since, 0) / rel.length : null;
+    const head = a.k === "insider_buying" && a.side === "bear" ? "Net opportunistic insider selling" : a.label + (a.side === "bear" ? " (bearish side)" : "");
+    let h = `<h3>${xb(a.k, esc(head))}</h3><p class="small">${esc(a.why)}. ${rows.length} names with a fresh signal (expires ${rows[0] ? rows[0].win : "–"} days after the ${a.k === "insider_buying" ? "latest qualifying filing" : "signal"}).${isNum(avg) ? ` Since their signals, these names average ${spct(avg)} versus SPY.` : ""}</p>`;
+    if (!rows.length) return h + `<p class="empty">No fresh signals.</p>`;
+    return h + `<div class="table-wrap"><table><thead><tr><th>Stock</th><th>Sector</th><th class="num">Signal</th><th class="num">Latest trigger</th><th class="num">Days left</th><th class="num">Price then</th><th class="num">Since</th><th class="num">vs SPY</th><th class="num">Price now</th></tr></thead><tbody>` +
+      rows.map((r) => `<tr><td>${xb(a.k, `<span class="tk">${esc(r.t)}</span>`, r.t)}<span class="nm">${esc(r.n)}</span></td><td class="small">${esc(r.s)}</td><td class="num">${leadValue(a.k, r)}</td><td class="num">${fdate(r.anchor)}</td><td class="num">${r.left}</td><td class="num">${isNum(r.px_since) ? "$" + r.px_since.toFixed(2) : "–"}</td><td class="num ${cls(r.ret_since)}">${spct(r.ret_since)}</td><td class="num ${cls(isNum(r.ret_since) && isNum(r.spy_since) ? r.ret_since - r.spy_since : null)}">${isNum(r.ret_since) && isNum(r.spy_since) ? spct(r.ret_since - r.spy_since) : "–"}</td><td class="num">${isNum(r.px) ? "$" + r.px.toFixed(2) : "–"}</td></tr>`).join("") + `</tbody></table></div>`;
+  }
+
+  // ------------------------------------------------------------------ Evidence tab
+  function pageEvidence() {
+    const v = S.data.validation || {}, ts = (v.trend || {}).stocks || {}, eb = (S.data.leads_backtest || {}).etf_lead || {};
+    const LB = (S.data.leads_backtest || {}).leads || {}, ib = (LB.insider_buying || {}).bear_attribution || {};
+    const bub = v.bubbles || {};
+    const ok = [
+      ["Trend rule (stocks below their 10-month average → cut exposure)", ts.trend ? `Since 1927: Sharpe ${num(ts.trend.sharpe)} vs ${num(ts.buy_hold.sharpe)}, worst drawdown ${spct(ts.trend.max_dd, 0)} vs ${spct(ts.buy_hold.max_dd, 0)}` : "", "#backtests"],
+      ["Absolute-return mode", "Much smaller losses in every bear market since 1960, at the cost of lagging strong bull markets", "#backtests"],
+      ["Credit dials (credit gap, red zones)", "Beat their base rate as crash warnings in the 1960–2026 replay", "#crashes"],
+      ["Bubble watch (industry run-ups)", isNum(bub.crash_prob_after_100pct) ? `Crash odds ${pct(bub.crash_prob_after_100pct, 0)} after a 100% run-up vs ${pct(bub.base_crash_prob, 0)} base (49 industries since 1926)` : "", "#bubbles"],
+      ["Sector-ETF residual momentum", eb.reason ? `${eb.status}: ${eb.reason} (49 industries since 1963)` : "", "#leadlab"],
+      ["Net opportunistic insider selling (warning)", isNum(ib.alpha_ann) ? `${spct(ib.alpha_ann)} a year vs the market after six factors (t ${num(ib.alpha_t, 1)}); 2011 on only` : "", "#leadlab"],
+    ];
+    const no = [
+      ["Market-neutral long/short", "Flat at factor level since 2010; lost money at stock level"],
+      ["Momentum, low volatility, earnings surprise (stock scores)", "Costs ate momentum; low volatility and SUE showed no edge since 2011"],
+      ["Macro timing from the yield curve, EBP, VRP", "Good at recessions, poor at stock-market peaks"],
+      ["Stock lead lists: abnormal volume, earnings reaction, insider buying, mispricing", "Unproven, or nothing left after known factors"],
+      ["Cash reserve to buy dips", "Trailed staying fully invested since 1960"],
+    ];
+    let h = `<h1>Evidence</h1><p class="lede">What held up in testing, what didn't, and the full research behind both. The pipeline keeps computing everything, so an item can move up if its record improves.</p>
+      <h2>Held up</h2><div class="table-wrap"><table><thead><tr><th>Signal</th><th>Evidence</th><th></th></tr></thead><tbody>` +
+      ok.map(([a, b, l]) => `<tr><td>${esc(a)}</td><td class="small">${esc(b)}</td><td><a href="${l}">Details</a></td></tr>`).join("") + `</tbody></table></div>
+      <h2>Did not hold up</h2><div class="table-wrap"><table><thead><tr><th>Signal</th><th>Result</th></tr></thead><tbody>` +
+      no.map(([a, b]) => `<tr><td>${esc(a)}</td><td class="small">${esc(b)}</td></tr>`).join("") + `</tbody></table></div>
+      <h2>Research pages</h2><ul class="evlinks">
+        <li><a href="#backtests">Backtests</a>: strategy modes, factor signals, stock-level test, version 2 vs 1</li>
+        <li><a href="#crashes">Crash study</a>: bear-market replay, warnings, when to buy</li>
+        <li><a href="#leadlab">Lead research</a>: all lead indicators, their backtests and daily lists</li>
+        <li><a href="#bubbles">Bubble watch</a>: industry run-ups</li>
+        <li><a href="#stocks">Stock rankings</a>: full S&P 1500 scores by mode</li>
+        <li><a href="#etfs">ETF rankings</a></li>
+        <li><a href="#methodology">Methodology</a> · <a href="#health">Data health</a></li></ul>`;
     return h;
   }
 
@@ -774,12 +886,14 @@
   }
 
   // ------------------------------------------------------------------ router + events
-  const PAGES = { regime: pageRegime, leads: pageLeads, bubbles: pageBubbles, stocks: pageStocks, etfs: pageEtfs, portfolio: pagePortfolio,
+  const PAGES = { regime: pageRegime, leads: pageWatch, leadlab: pageLeads, evidence: pageEvidence, bubbles: pageBubbles, stocks: pageStocks, etfs: pageEtfs, portfolio: pagePortfolio,
     backtests: pageBacktests, crashes: pageCrashes, methodology: pageMethodology, health: pageHealth };
   function render() {
     const page = (location.hash || "#regime").slice(1);
     S.page = PAGES[page] ? page : "regime";
-    document.querySelectorAll(".tabs a").forEach((a) => a.setAttribute("aria-current", a.dataset.page === S.page ? "page" : "false"));
+    const TAB_OF = { regime: "regime", bubbles: "regime", leads: "leads", portfolio: "portfolio" };
+    const tab = TAB_OF[S.page] || "evidence";
+    document.querySelectorAll(".tabs a").forEach((a) => a.setAttribute("aria-current", a.dataset.page === tab ? "page" : "false"));
     const view = $("#view");
     let html;
     try { html = PAGES[S.page](); } catch (e) { html = `<p class="empty">Couldn't draw this page: ${esc(e.message)}</p>`; console.error(e); }
