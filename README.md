@@ -217,6 +217,11 @@ names lagged the universe. Every table on every tab sorts by any column: click a
 The dashboard's ↻ button reloads the latest published data. "Recompute ↗" opens the pipeline on GitHub,
 where **Run workflow** recalculates everything (about 5–20 minutes; the page picks it up automatically).
 
+Findings (Nov 2026): the insider ranking spread (+4%/yr since 2011) comes from non-selling companies
+beating heavy sellers, not from buyers; net opportunistic sellers lagged by 1.1%/yr (alpha after
+Fama-French 5 + momentum −1.1%, t −2.6). Both ends of the mispricing model beat the universe after factors
+(cheap +2.2%, t 1.9; expensive +2.6%, t 2.4), a U-shape rather than a directional signal.
+
 The "flagged by two or more" list counts only indicators whose flagged names beat the universe before costs
 over their full backtest. A first version used "two or more insiders buying within 60 days"; it showed no edge
 and was replaced by the opportunistic-insider rule above.
