@@ -269,7 +269,7 @@ def run_leads_backtest(univ: pd.DataFrame, panels: dict, derived: dict, cfg: dic
         res["curve"] = [[d.strftime("%Y-%m"), round(float(v), 4)] for d, v in curve.items()]
         out["leads"][k] = res
     out["insider_diagnostic"] = _summarise_diag(idiag, split)
-    out["insider_sell_decay"] = {f"{a}-{b} days": _period_stats(ser(v), split) for (a, b), v in age_rec.items()}
+    out["insider_sell_decay"] = {f"{a}-{b} days": _period_stats(ser(v), split) if v else {"full": {"n": 0}} for (a, b), v in age_rec.items()}
     out["insider_sell_decay_note"] = ("Net opportunistic sellers' next-month return vs the liquid universe, grouped by days since "
                                      "the most recent opportunistic sale filing. Negative = underperformed.")
     ind = industry_residual_momentum(ind49, ff3, split)
