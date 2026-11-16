@@ -234,9 +234,20 @@
     try { await refresh(true); } finally {
       b.disabled = false; b.classList.remove("spinning");
       const now = S.manifest && S.manifest.run_time;
-      b.title = now && now !== before ? "Loaded newer data" : "Already showing the latest published data";
-      announce(b.title);
+      const when = S.manifest && S.manifest.run_time ? new Date(S.manifest.run_time).toLocaleString([], { weekday: "short", hour: "numeric", minute: "2-digit" }) : "unknown";
+      const msg = now && now !== before ? `Loaded newer data (pipeline run ${when}).`
+        : `Up to date: this is the latest pipeline run (${when}). New data arrives every 30 minutes in market hours and nightly on weekdays.`;
+      b.title = msg;
+      toast(msg, now && now !== before ? "" : `<a href="${REPO}/actions/workflows/pipeline.yml" target="_blank" rel="noopener">Recompute now ↗</a>`);
     }
+  }
+  function toast(msg, extra) {
+    let t = $("#toast");
+    if (!t) { t = document.createElement("div"); t.id = "toast"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+    t.innerHTML = `${esc(msg)} ${extra || ""}`;
+    t.hidden = false;
+    clearTimeout(toast._t);
+    toast._t = setTimeout(() => { t.hidden = true; }, 8000);
   }
   function announce(msg) {
     let live = $("#sr-live");
